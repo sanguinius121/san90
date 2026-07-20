@@ -1,0 +1,44 @@
+{
+  "name": "san90-spectrum-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "backend:start": "bash scripts/manage-services.sh start backend san90",
+    "backend:start:simulator": "bash scripts/manage-services.sh start backend simulator",
+    "backend:stop": "bash scripts/manage-services.sh stop backend",
+    "device:reset": "bash scripts/reset-san90-usb.sh",
+    "frontend:start": "bash scripts/manage-services.sh start frontend",
+    "frontend:stop": "bash scripts/manage-services.sh stop frontend",
+    "services:status": "bash scripts/manage-services.sh status",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "preview": "vite preview",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "zustand": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "latest",
+    "eslint-plugin-react-hooks": "latest",
+    "eslint-plugin-react-refresh": "latest",
+    "globals": "latest",
+    "jsdom": "^29.1.1",
+    "source-map-js": "^1.2.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "latest",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}
