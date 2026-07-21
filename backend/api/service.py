@@ -258,9 +258,49 @@ class AnalyzerService:
             "invalid_frames": 0 if diagnostics is None else diagnostics.invalid_packets,
             "timeouts": 0 if diagnostics is None else diagnostics.timeouts,
             "reconfiguration": None if reconfiguration is None else asdict(reconfiguration) | {"mean_duration_s": reconfiguration.mean_duration_s},
+            "ai_stream": self.ai_stream_status(),
             "waterfall_producer": self._waterfall_metrics_payload(),
             "spectrum_temporal": self.source.get_spectrum_temporal_metrics() if isinstance(self.source, (San90Source, SimulatorSource)) else None,
         }
+
+    def ai_stream_status(self) -> dict[str, object]:
+        if isinstance(self.source, San90Source):
+            return self.source.get_ai_stream_status()
+        return {
+            "enabled": False,
+            "supported": False,
+            "reason": "The production AI stream consumes native SAN-90 RTA packets only",
+        }
+
+    async def set_ai_stream_enabled(self, enabled: bool) -> dict[str, object]:
+        if not isinstance(self.source, San90Source):
+            raise ControlError(
+                ControlErrorCode.UNSUPPORTED_SETTING,
+                "AI stream output requires the SAN-90 source",
+                recoverable=True,
+            )
+        return await asyncio.to_thread(self.source.set_ai_stream_enabled, enabled)
+
+    async def set_ai_power_profile(self, name: str) -> dict[str, object]:
+        if not isinstance(self.source, San90Source):
+            raise ControlError(
+                ControlErrorCode.UNSUPPORTED_SETTING,
+                "AI power profiles require the SAN-90 source",
+                requested_value=name,
+                recoverable=True,
+            )
+        try:
+            return await asyncio.to_thread(self.source.set_ai_power_profile, name)
+        except ValueError as error:
+            raise ControlError(
+                ControlErrorCode.VALUE_OUT_OF_RANGE,
+                str(error),
+                requested_value=name,
+                recoverable=True,
+            ) from error
+
+    def latest_ai_preview_png(self) -> bytes | None:
+        return self.source.latest_ai_preview_png() if isinstance(self.source, San90Source) else None
 
     def capabilities_payload(self) -> dict[str, Any]:
         if self.source is None:
@@ -499,11 +539,13 @@ class AnalyzerService:
         conversion_ms = 0.0 if diagnostics is None or not diagnostics.display_snapshots_created else 1000.0 * diagnostics.display_conversion_total_s / diagnostics.display_snapshots_created
         snapshot_ms = 0.0 if diagnostics is None or not diagnostics.display_snapshots_created else 1000.0 * diagnostics.snapshot_total_s / diagnostics.display_snapshots_created
         point_rate_mps = status["sdk_frames_per_second"] * (status["point_count"] or 0) / 1e6
+        ai = status["ai_stream"]
         logger.info(
             "analyzer_metrics source=%s sdk_fps=%.1f point_rate_Mps=%.2f points=%s process_cpu_pct=%.1f "
             "native_copy_ms=%.4f conversion_ms=%.4f snapshot_ms=%.4f spectrum_fps=%.1f waterfall_rows_ps=%.1f waterfall_batches_ps=%.1f "
             "replaced=%s waterfall_Bps=%.0f websocket_Bps=%.0f clients=%s timeouts=%s invalid=%s errors=%s "
-            "last_sdk_age_ms=%s last_publish_age_ms=%s memory_MiB=%.1f",
+            "last_sdk_age_ms=%s last_publish_age_ms=%s memory_MiB=%.1f "
+            "ai_enabled=%s ai_created_fps=%.1f ai_sent_fps=%.1f ai_queue=%s ai_drop_queue=%s ai_drop_buffer=%s ai_drop_send=%s",
             self.source_name,
             status["sdk_frames_per_second"],
             point_rate_mps,
@@ -525,6 +567,13 @@ class AnalyzerService:
             None if status["last_sdk_frame_age_ms"] is None else round(status["last_sdk_frame_age_ms"], 3),
             None if status["last_publish_age_ms"] is None else round(status["last_publish_age_ms"], 3),
             memory_mib,
+            ai.get("enabled", False),
+            float(ai.get("ai_created_fps", 0.0)),
+            float(ai.get("ai_actual_output_fps", 0.0)),
+            ai.get("ai_queue_depth", 0),
+            ai.get("ai_images_dropped_queue_total", 0),
+            ai.get("ai_images_dropped_no_buffer_total", 0),
+            ai.get("ai_images_dropped_send_total", 0),
         )
         self._last_log = now
         self._last_log_bytes = self.websocket_bytes_sent

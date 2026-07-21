@@ -2,6 +2,8 @@
 
 A React/TypeScript RF analyzer interface with native WebGL2 plots, Canvas 2D measurement overlays, Zustand stores, a browser simulator, and a bounded binary WebSocket path for the SAN-90.
 
+The independent external-AI GRAY8 waterfall publisher is documented in [docs/ai-gray8-stream.md](docs/ai-gray8-stream.md).
+
 ## Run
 
 Requires a current Node.js LTS release.

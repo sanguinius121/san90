@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, field_validator
 from fastapi.exceptions import RequestValidationError
 
@@ -101,6 +101,14 @@ class ResolutionTradeoffRequest(BaseModel):
     index: int
 
 
+class AiStreamEnabledRequest(BaseModel):
+    enabled: bool
+
+
+class AiPowerProfileRequest(BaseModel):
+    profile: str
+
+
 @app.exception_handler(ControlError)
 async def control_error_handler(_: Request, error: ControlError) -> JSONResponse:
     validation_codes = {
@@ -138,6 +146,29 @@ async def capabilities() -> dict[str, object]:
 @app.get("/api/analyzer/settings")
 async def settings() -> dict[str, object]:
     return service.settings_payload()
+
+
+@app.get("/api/ai-stream/status")
+async def ai_stream_status() -> dict[str, object]:
+    return service.ai_stream_status()
+
+
+@app.put("/api/ai-stream/enabled")
+async def ai_stream_enabled(request: AiStreamEnabledRequest) -> dict[str, object]:
+    return await service.set_ai_stream_enabled(request.enabled)
+
+
+@app.put("/api/ai-stream/power-profile")
+async def ai_power_profile(request: AiPowerProfileRequest) -> dict[str, object]:
+    return await service.set_ai_power_profile(request.profile)
+
+
+@app.get("/api/ai-stream/preview.png")
+async def ai_stream_preview() -> Response:
+    image = service.latest_ai_preview_png()
+    if image is None:
+        raise HTTPException(status_code=404, detail="AI preview is disabled or no preview image is available")
+    return Response(content=image, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @app.put("/api/analyzer/frequency")

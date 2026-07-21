@@ -3,3 +3,5 @@ dist/
 .vite/
 *.log
 .run/
+__pycache__/
+*.py[cod]

@@ -17,6 +17,8 @@ from typing import Any, Callable
 
 import numpy as np
 
+from backend.ai_stream import AiStreamConfig, AiStreamPipeline
+
 from .base import AnalyzerSource
 from .buffers import IntervalMaxHoldBuffer, LatestFrameBuffer
 from .errors import (
@@ -253,10 +255,12 @@ class San90Source(AnalyzerSource):
         self._spectrum_temporal_accumulator: NativeSpectrumTemporalAccumulator | None = None
         self._spectrum_temporal_exchange = LatestSpectrumTemporalExchange()
         self._next_spectrum_ns = 0
+        self._ai_stream = AiStreamPipeline(AiStreamConfig.from_environment())
 
     def connect(self) -> None:
         self._ensure_owner_thread()
         self._submit(self._connect_on_owner)
+        self._ai_stream.start()
 
     def disconnect(self) -> None:
         thread = self._thread
@@ -265,6 +269,7 @@ class San90Source(AnalyzerSource):
         try:
             self._submit(self._disconnect_on_owner)
         finally:
+            self._ai_stream.stop()
             with self._state_lock:
                 self._shutdown = True
             try:
@@ -468,6 +473,26 @@ class San90Source(AnalyzerSource):
         accumulator = self._raw_accumulator
         metadata = accumulator.metadata if accumulator is not None else None
         return metadata.mapping if metadata is not None else None
+
+    def get_ai_stream_status(self) -> dict[str, object]:
+        return self._ai_stream.status()
+
+    def set_ai_stream_enabled(self, enabled: bool) -> dict[str, object]:
+        self._require_owner()
+        if enabled:
+            self._ai_stream.start_publisher()
+            self._submit(lambda: self._ai_stream.set_accepting(True), command_type="ai_stream_enabled", payload=True)
+        else:
+            self._submit(lambda: self._ai_stream.set_accepting(False), command_type="ai_stream_enabled", payload=False)
+            self._ai_stream.stop_publisher()
+        return self._ai_stream.status()
+
+    def set_ai_power_profile(self, name: str) -> dict[str, object]:
+        self._ai_stream.set_power_profile(name)
+        return self._ai_stream.status()
+
+    def latest_ai_preview_png(self) -> bytes | None:
+        return self._ai_stream.latest_preview_png()
 
     def get_status(self) -> RuntimeStatus:
         with self._state_lock:
@@ -909,6 +934,15 @@ class San90Source(AnalyzerSource):
             float(profile.RBW_Hz), int(frame_info.FrameWidth), self._waterfall_override
         )
         producer.reconfigure(int(frame_info.FrameWidth), self._configuration_generation, config)
+        try:
+            self._ai_stream.configure(
+                int(frame_info.PacketFrame),
+                int(frame_info.FrameWidth),
+                self._configuration_generation,
+            )
+        except (MemoryError, ValueError) as error:
+            logger.error("AI stream buffer configuration failed; disabling AI output: %s", error)
+            self._ai_stream.set_accepting(False)
 
     def _stop_on_owner(self) -> None:
         if not self._trigger_active:
@@ -1032,6 +1066,7 @@ class San90Source(AnalyzerSource):
         if completed_temporal is not None:
             self._spectrum_temporal_exchange.publish(completed_temporal)
         waterfall_producer.add_packet(raw, metadata, trace_timestamp_step_ns=timestamp_step_ns)
+        self._ai_stream.offer_packet(raw, metadata, trace_timestamp_step_ns=timestamp_step_ns)
         native_copy_elapsed = time.perf_counter() - native_copy_started
         self._sequence += count
 
