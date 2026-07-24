@@ -39,6 +39,13 @@ class ControlModelTests(unittest.TestCase):
         self.assertEqual(GAIN_STRATEGY_VALUES, {"low-noise": 0, "high-linearity": 1})
         self.assertEqual(PREAMPLIFIER_VALUES, {"auto": 0, "off": 1, "low": 2, "medium": 3, "high": 4})
 
+    def test_attenuation_readback_keeps_auto_mode_separate_from_actual_value(self) -> None:
+        from backend.analyzer.control_mapping import attenuation_readback, normalize_manual_attenuation
+
+        self.assertEqual(attenuation_readback(3, None), (3, True))
+        self.assertEqual(attenuation_readback(10, 12), (10, False))
+        self.assertEqual([normalize_manual_attenuation(value) for value in (0, 5, 10, 20)], [3, 3, 9, 18])
+
     def test_only_current_san90_controls_are_advertised(self) -> None:
         controls = San90Source().get_capabilities().supported_controls
         self.assertEqual(controls, {

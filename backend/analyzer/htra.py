@@ -262,6 +262,13 @@ class HtraApi:
         self.lib.Device_Open.restype = ct.c_int
         self.lib.Device_Close.argtypes = [device_ref]
         self.lib.Device_Close.restype = ct.c_int
+        self.lib.Device_GetAmpAttenState.argtypes = [
+            device_ref,
+            ct.POINTER(ct.c_int),
+            ct.POINTER(ct.c_int8),
+            ct.POINTER(ct.c_uint8),
+        ]
+        self.lib.Device_GetAmpAttenState.restype = None
         self.lib.RTA_ProfileDeInit.argtypes = [device_ref, ct.POINTER(RtaProfile)]
         self.lib.RTA_ProfileDeInit.restype = ct.c_int
         self.lib.RTA_Configuration.argtypes = [

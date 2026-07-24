@@ -5,7 +5,7 @@ const DISPLAY_FPS = 60
 const gaussian = (x: number, center: number, width: number) => Math.exp(-0.5 * ((x - center) / width) ** 2)
 
 export interface MockTemporalBatch{latest:Float32Array;maximum:Float32Array;waterfallRows:Uint8Array;tracesIntegrated:number}
-export function generateMockTemporalBatch(points:number,phase:number,referenceDbm:number,rowCount:number):MockTemporalBatch{
+export function generateMockTemporalBatch(points:number,phase:number,referenceDbm:number,rowCount:number,amplitudeOffsetDb=0):MockTemporalBatch{
   if(points<2||rowCount<1)throw new Error('Invalid mock temporal dimensions')
   const nativeCount=Math.max(8,rowCount),latest=new Float32Array(points),maximum=new Float32Array(points).fill(-Infinity)
   const waterfallRows=new Uint8Array(rowCount*points)
@@ -24,6 +24,7 @@ export function generateMockTemporalBatch(points:number,phase:number,referenceDb
       // Exactly one native trace: shorter than the 60 Hz display interval.
       if(trace===2)db=Math.max(db,-43+62*gaussian(x,activeHop,.0035))
       if((Math.floor(t)%13)<6)db=Math.max(db,-72+15*gaussian(x,.61+Math.sin(t*.11)*.018,.012))
+      db+=amplitudeOffsetDb
       maximum[i]=Math.max(maximum[i],db)
       if(trace===nativeCount-1)latest[i]=db
       const code=Math.max(0,Math.min(255,Math.round(((db+112)/(referenceDbm+112))*255)))
@@ -42,16 +43,19 @@ export class MockSpectrumSource {
   private generation = 1
   start() {
     if (this.timer !== null) return
-    useRuntimeStore.getState().update({ source:'simulator', connection: 'mock', lastError: undefined })
+    const debugOverflow =
+      new URLSearchParams(location.search).get("ifOverflow") === "1" ||
+      import.meta.env.VITE_SIMULATOR_IF_OVERFLOW === "true";
+    useRuntimeStore.getState().update({ source:'simulator', connection: 'mock', lastError: undefined, ifOverflow: debugOverflow })
     this.timer = window.setInterval(() => this.generate(), 1000 / DISPLAY_FPS)
   }
-  stop() { if (this.timer !== null) window.clearInterval(this.timer); this.timer = null }
+  stop() { if (this.timer !== null) window.clearInterval(this.timer); this.timer = null; useRuntimeStore.getState().update({ifOverflow:false}) }
   private generate() {
     try {
-      const { centerHz, spanHz, referenceDbm } = useDeviceStore.getState();const runtime=useRuntimeStore.getState();const points=runtime.pointCount
+      const { centerHz, spanHz, referenceDbm, amplitudeOffsetDb } = useDeviceStore.getState();const runtime=useRuntimeStore.getState();const points=runtime.pointCount
       const t = this.phase
       const rowCount=runtime.waterfallRowsPerBatch
-      const temporal=generateMockTemporalBatch(points,t,referenceDbm,rowCount)
+      const temporal=generateMockTemporalBatch(points,t,referenceDbm,rowCount,amplitudeOffsetDb)
       const now = performance.now()
       this.frameTimes.push(now); while (this.frameTimes[0] < now - 1000) this.frameTimes.shift()
       useRuntimeStore.getState().update({ fps: this.frameTimes.length, spectrumFps:this.frameTimes.length, waterfallFps:runtime.waterfallRowsPerSecond,waterfallBatchFps:60, actualSpanHz:spanHz, actualRbwHz:useDeviceStore.getState().rbwHz })

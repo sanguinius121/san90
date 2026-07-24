@@ -53,6 +53,8 @@ export interface AnalyzerRuntimeStatus {
   source: AnalyzerSourceType
   connected: boolean
   acquisition_running: boolean
+  if_overflow: boolean
+  amplitude_offset_db?: number
   sdk_frames_per_second: number
   point_count: number | null
   spectrum_publish_fps: number

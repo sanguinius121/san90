@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 import time
 from dataclasses import replace
 
 import numpy as np
 
+from .amplitude_correction import (
+    AMPLITUDE_OFFSET_MAX_DB,
+    AMPLITUDE_OFFSET_MIN_DB,
+    AMPLITUDE_OFFSET_STEP_DB,
+    validate_amplitude_offset,
+)
 from .base import AnalyzerSource
 from .buffers import IntervalMaxHoldBuffer, LatestFrameBuffer
 from .control_mapping import DETECTOR_VALUES, RBW_MODE_VALUES, WINDOW_VALUES
@@ -33,7 +40,14 @@ from .waterfall import TimedWaterfallBatchProducer, WaterfallProducerMetrics, Wa
 
 
 class SimulatorSource(AnalyzerSource):
-    def __init__(self, *, point_count: int = 3328, frame_rate_hz: float = 60.0, seed: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        point_count: int = 3328,
+        frame_rate_hz: float = 60.0,
+        seed: int | None = None,
+        simulate_if_overflow: bool | None = None,
+    ) -> None:
         if point_count < 16 or frame_rate_hz <= 0:
             raise ValueError("point_count must be >= 16 and frame_rate_hz must be positive")
         self._point_count = point_count
@@ -72,6 +86,11 @@ class SimulatorSource(AnalyzerSource):
         self._published = 0
         self._started_ns: int | None = None
         self._last_frame_ns: int | None = None
+        self._simulate_if_overflow = (
+            os.getenv("SIMULATOR_IF_OVERFLOW", "").strip().lower() in {"1", "true", "yes", "on"}
+            if simulate_if_overflow is None
+            else simulate_if_overflow
+        )
         self._waterfall_config = WaterfallRateConfig(60.0, 60.0, 1)
         self._waterfall = TimedWaterfallBatchProducer(
             self._point_count, self._configuration_generation, self._waterfall_config
@@ -117,12 +136,17 @@ class SimulatorSource(AnalyzerSource):
                 "center_frequency_hz", "span_hz", "rbw_hz", "rbw_mode", "vbw_hz",
                 "reference_level_dbm", "attenuation_db", "preamplifier",
                 "gain_strategy", "if_agc_enabled", "window", "detector",
-                "resolution_tradeoff_index",
+                "resolution_tradeoff_index", "amplitude_offset_db",
             }),
             numeric_ranges={
                 "center_frequency_hz": NumericRange(1e6, 9.5e9),
                 "span_hz": NumericRange(1e5, 9e9),
                 "reference_level_dbm": NumericRange(-80.0, 20.0, 1.0),
+                "amplitude_offset_db": NumericRange(
+                    AMPLITUDE_OFFSET_MIN_DB,
+                    AMPLITUDE_OFFSET_MAX_DB,
+                    AMPLITUDE_OFFSET_STEP_DB,
+                ),
             },
             native_point_counts=tuple(step.point_count for step in SAN90_RESOLUTION_TRADEOFF_STEPS),
             supports_density=False,
@@ -168,6 +192,7 @@ class SimulatorSource(AnalyzerSource):
             return replace(self._settings)
 
     def apply_settings(self, settings: AnalyzerSettings) -> AnalyzerSettings:
+        validate_amplitude_offset(settings.amplitude_offset_db)
         if settings.mode != "rta":
             raise AnalyzerConfigurationError("Simulator currently supports only rta mode")
         if settings.center_frequency_hz <= 0:
@@ -216,6 +241,15 @@ class SimulatorSource(AnalyzerSource):
             self._spectrum_temporal_exchange.clear()
             self._waterfall.reconfigure(self._point_count, self._configuration_generation, self._waterfall_config)
             return replace(self._settings)
+
+    def apply_amplitude_offset(self, amplitude_offset_db: float) -> float:
+        value = validate_amplitude_offset(amplitude_offset_db)
+        with self._lock:
+            self._settings = replace(self._settings, amplitude_offset_db=value)
+            self._requested_settings = replace(self._requested_settings, amplitude_offset_db=value)
+            self._spectrum_temporal.reset(generation=self._configuration_generation)
+            self._spectrum_temporal_exchange.clear()
+        return value
 
     def configure_waterfall(self, config: WaterfallRateConfig) -> None:
         """Configure simulator row timing; this does not touch SAN-90 hardware."""
@@ -272,6 +306,7 @@ class SimulatorSource(AnalyzerSource):
                 resolution_tradeoff_state="auto" if settings.rbw_mode == "auto" else "matched" if matched is not None else "custom",
                 resolution_tradeoff_step_id=matched.id if matched is not None and settings.rbw_mode == "manual" else None,
                 frequency_bin_spacing_hz=span / self._point_count,
+                amplitude_offset_db=settings.amplitude_offset_db,
             ),
             configuration_generation=generation,
         )
@@ -324,6 +359,8 @@ class SimulatorSource(AnalyzerSource):
                 source="simulator",
                 connected=self._connected,
                 acquisition_running=running,
+                if_overflow=self._simulate_if_overflow,
+                amplitude_offset_db=self._settings.amplitude_offset_db,
                 sdk_frames_received=self._received,
                 display_frames_published=self._published,
                 frames_replaced=self._latest.replaced,
@@ -332,6 +369,11 @@ class SimulatorSource(AnalyzerSource):
                 point_count=self._point_count,
                 configuration_generation=self._configuration_generation,
             )
+
+    def set_if_overflow(self, active: bool) -> None:
+        """Minimal diagnostic hook for verifying overflow telemetry without hardware."""
+        with self._lock:
+            self._simulate_if_overflow = bool(active)
 
     def get_device_info(self) -> DeviceInfo | None:
         if not self._connected:
@@ -412,7 +454,7 @@ class SimulatorSource(AnalyzerSource):
             hop = hops[(int(phase) // 23) % len(hops)]
             hop_signal = -105.0 + 62.0 * np.exp(-0.5 * ((x - hop) / 0.0035) ** 2)
             values = np.maximum(values, hop_signal)
-        values = np.ascontiguousarray(values, dtype=np.float32)
+        values = np.ascontiguousarray(values + np.float32(settings.amplitude_offset_db), dtype=np.float32)
 
         span = float(settings.span_hz or 0.0)
         timestamp_ns = time.time_ns()

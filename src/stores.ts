@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import type { AnalyzerSourceType, ConnectionState, Marker, ToolMode, Viewport } from './types'
+import type { RfSwitchStatusApi } from './data/controlApi'
+import { DEFAULT_SPECTRUM_DYNAMIC_RANGE_DB, spectrumRangeForReferenceLevel } from './rendering/amplitudeScale'
 
 interface DeviceState {
   centerHz: number; stepHz: number; spanHz: number; previousSpanHz: number
@@ -24,13 +26,20 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
 interface DisplayState {
   colormap: string; persistence: boolean; activeTool: ToolMode; viewport: Viewport; marker: Marker | null
   setTool: (tool: ToolMode) => void; setViewport: (viewport: Partial<Viewport>) => void; resetViewport: () => void
+  setSpectrumReferenceLevel: (referenceLevelDbm: number) => void
   setMarker: (marker: Marker | null) => void; setPersistence: (enabled: boolean) => void
 }
-const defaultViewport: Viewport = { start: 0, end: 1, minDbm: -110, maxDbm: -10 }
+const defaultAmplitudeRange = spectrumRangeForReferenceLevel(-10, DEFAULT_SPECTRUM_DYNAMIC_RANGE_DB)
+const defaultViewport: Viewport = { start: 0, end: 1, ...defaultAmplitudeRange }
 export const useDisplayStore = create<DisplayState>((set) => ({
   colormap: 'turbo', persistence: true, activeTool: 'marker', viewport: defaultViewport, marker: null,
   setTool: (activeTool) => set({ activeTool }), setViewport: (v) => set((s) => ({ viewport: { ...s.viewport, ...v } })),
-  resetViewport: () => set({ viewport: defaultViewport }), setMarker: (marker) => set({ marker }),
+  resetViewport: () => set((s) => ({ viewport: { ...s.viewport, start: 0, end: 1 } })),
+  setSpectrumReferenceLevel: (referenceLevelDbm) => set((s) => {
+    const dynamicRangeDb = s.viewport.maxDbm - s.viewport.minDbm
+    return { viewport: { ...s.viewport, ...spectrumRangeForReferenceLevel(referenceLevelDbm, dynamicRangeDb) } }
+  }),
+  setMarker: (marker) => set({ marker }),
   setPersistence: (persistence) => set({ persistence }),
 }))
 
@@ -48,6 +57,7 @@ interface RuntimeState {
   fftSize:number|null;frequencyBinSpacingHz:number|null;tracesPerSpectrumFrame:number|null;tracesPerWaterfallRow:number|null
   waterfallFloorDbm: number; waterfallCeilingDbm: number
   configurationGeneration:number; reconfiguring:boolean
+  ifOverflow:boolean
   sweepTimeMs: number; websocketBytes: number; acquisitionErrors: number; lastError?: string
   update: (values: Partial<Omit<RuntimeState, 'update'>>) => void
 }
@@ -60,6 +70,21 @@ export const useRuntimeStore = create<RuntimeState>((set) => ({
   fftSize:null,frequencyBinSpacingHz:null,tracesPerSpectrumFrame:null,tracesPerWaterfallRow:null,
   waterfallFloorDbm:-112, waterfallCeilingDbm:-10,
   configurationGeneration:0, reconfiguring:false,
+  ifOverflow:false,
   sweepTimeMs: 40, websocketBytes: 0, acquisitionErrors: 0,
   update: (values) => set(values),
+}))
+
+interface RfSwitchState extends RfSwitchStatusApi {
+  loading:boolean
+  applying:boolean
+  update:(values:Partial<Omit<RfSwitchState,'update'>>) => void
+}
+
+export const useRfSwitchStore=create<RfSwitchState>((set)=>({
+  connection_state:'disabled',hardware_present:false,available:false,connected:false,backend:'disabled',simulated:false,
+  requested_path:null,requested_port:null,reported_path:null,reported_port:null,expected_fail_safe_path:null,
+  raw_address:null,raw_gpio_value:null,gpio_value:null,readback_matches_request:false,verification:'unavailable',
+  last_error:null,reconnect_attempts:0,last_connected_at:null,last_disconnected_at:null,updated_at_monotonic:0,loading:true,applying:false,
+  update:(values)=>set(values),
 }))

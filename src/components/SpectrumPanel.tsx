@@ -20,6 +20,7 @@ import {
 } from "../rendering/renderSchedule";
 import { spectrumBinFrequencyHz } from "../data/frequencyBins";
 import { plotXToNormalizedFrequency,sharedHorizontalPlotRect } from "../rendering/plotGeometry";
+import { IfOverflowWarning } from "./IfOverflowWarning";
 
 export function SpectrumPanel() {
   const glRef = useRef<HTMLCanvasElement>(null);
@@ -31,8 +32,12 @@ export function SpectrumPanel() {
   const [error, setError] = useState<string>();
   const center = useDeviceStore((s) => s.centerHz);
   const span = useDeviceStore((s) => s.spanHz);
+  const referenceLevelDbm = useDeviceStore((s) => s.referenceDbm);
   const generation = useRuntimeStore((s) => s.configurationGeneration);
   const pointCount = useRuntimeStore((s) => s.pointCount);
+  useEffect(() => {
+    useDisplayStore.getState().setSpectrumReferenceLevel(referenceLevelDbm);
+  }, [referenceLevelDbm]);
   useEffect(() => {
     const canvas = glRef.current;
     const overlay = overlayRef.current;
@@ -228,9 +233,12 @@ export function SpectrumPanel() {
           <span className="plot-title">SPECTRUM</span>
           <span className="plot-subtitle">LIVE DENSITY</span>
         </div>
-        <div className="trace-key">
-          <span />
-          <b>T1</b> CLEAR / WRITE
+        <div className="plot-header-actions">
+          <IfOverflowWarning />
+          <div className="trace-key">
+            <span />
+            <b>T1</b> CLEAR / WRITE
+          </div>
         </div>
       </header>
       <div

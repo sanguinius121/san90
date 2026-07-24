@@ -2,6 +2,7 @@ export interface ResolutionTradeoffStepApi {id:string;index:number;requested_rbw
 export interface AnalyzerCapabilitiesApi {
   source:string
   supported_controls:string[]
+  numeric_ranges?:Record<string,{minimum:number;maximum:number;step:number|null}>
   center_frequency_min_hz:number|null
   center_frequency_max_hz:number|null
   center_frequency_step_hz:number|null
@@ -37,20 +38,39 @@ export interface AnalyzerCapabilitiesApi {
 }
 
 export interface AnalyzerSettingsApi {
-  requested:{center_frequency_hz:number;reference_level_dbm:number;attenuation_db:number|null;preamplifier:string|null;gain_strategy:string|null;rbw_hz:number|null;rbw_mode:string;window:string|null;detector:string|null}
-  actual:{center_frequency_hz:number;start_frequency_hz:number;stop_frequency_hz:number;span_hz:number;reference_level_dbm:number;attenuation_db:number|null;attenuation_automatic:boolean;preamplifier:string|null;gain_strategy:string|null;rbw_hz:number;rbw_mode:string;window:string|null;detector:string|null;fft_size:number;scale_to_dbm:number|null;offset_to_dbm:number|null;point_count:number;resolution_tradeoff_index:number|null;resolution_tradeoff_state:'auto'|'matched'|'custom';resolution_tradeoff_step_id:string|null;frequency_bin_spacing_hz:number|null}
+  requested:{center_frequency_hz:number;reference_level_dbm:number;attenuation_db:number|null;preamplifier:string|null;gain_strategy:string|null;rbw_hz:number|null;rbw_mode:string;window:string|null;detector:string|null;amplitude_offset_db?:number}
+  actual:{center_frequency_hz:number;start_frequency_hz:number;stop_frequency_hz:number;span_hz:number;reference_level_dbm:number;attenuation_db:number|null;attenuation_automatic:boolean;preamplifier:string|null;gain_strategy:string|null;rbw_hz:number;rbw_mode:string;window:string|null;detector:string|null;fft_size:number;scale_to_dbm:number|null;offset_to_dbm:number|null;point_count:number;resolution_tradeoff_index:number|null;resolution_tradeoff_state:'auto'|'matched'|'custom';resolution_tradeoff_step_id:string|null;frequency_bin_spacing_hz:number|null;amplitude_offset_db?:number}
   configuration_generation:number
+}
+
+export type RfPathId = 'rf1'|'rf2'|'rf3'|'rf4'|'rf5'|'rf6'|'rf7'|'rf8'
+export interface RfSwitchPathApi {id:RfPathId;rf_channel:string;address:number;label:string;external_lna:boolean}
+export interface RfSwitchCapabilitiesApi {enabled:boolean;default_path:RfPathId;selection_policy:string;paths:RfSwitchPathApi[]}
+export interface RfSwitchStatusApi {
+  connection_state:'disabled'|'connecting'|'available'|'disconnected'|'reconnecting'|'error'
+  hardware_present:boolean
+  available:boolean;connected:boolean;backend:string;simulated:boolean
+  requested_path:RfPathId|null;requested_port:RfPathId|null
+  reported_path:RfPathId|null;reported_port:RfPathId|null;expected_fail_safe_path:RfPathId|null
+  raw_address:number|null;raw_gpio_value:number|null;gpio_value:number|null
+  readback_matches_request:boolean;verification:'unavailable'|'unverified'|'verified'|'mismatch'
+  last_error:string|null;reconnect_attempts:number;last_connected_at:number|null;last_disconnected_at:number|null;updated_at_monotonic:number
 }
 
 const base=`http://${location.hostname}:8000`
 async function request<T>(path:string, init?:RequestInit):Promise<T>{
   const response=await fetch(`${base}${path}`,{...init,headers:{'Content-Type':'application/json',...(init?.headers??{})}})
   const body=await response.json().catch(()=>({}))
-  if(!response.ok) throw new Error(body?.error?.message??body?.detail??`Analyzer request failed (${response.status})`)
+  if(!response.ok) throw new Error(body?.error?.message??body?.detail?.message??body?.detail??`Analyzer request failed (${response.status})`)
   return body as T
 }
 export const analyzerApi={
   capabilities:()=>request<AnalyzerCapabilitiesApi>('/api/analyzer/capabilities'),
   settings:()=>request<AnalyzerSettingsApi>('/api/analyzer/settings'),
   put:<T>(path:string,body:object)=>request<T>(path,{method:'PUT',body:JSON.stringify(body)}),
+}
+export const rfSwitchApi={
+  capabilities:()=>request<RfSwitchCapabilitiesApi>('/api/rf-switch/capabilities'),
+  status:()=>request<RfSwitchStatusApi>('/api/rf-switch/status'),
+  setPath:(path:RfPathId)=>request<RfSwitchStatusApi>('/api/rf-switch/path',{method:'PUT',body:JSON.stringify({path})}),
 }

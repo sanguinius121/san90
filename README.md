@@ -4,6 +4,8 @@ A React/TypeScript RF analyzer interface with native WebGL2 plots, Canvas 2D mea
 
 The independent external-AI GRAY8 waterfall publisher is documented in [docs/ai-gray8-stream.md](docs/ai-gray8-stream.md).
 
+Manual external RF-path control through an Adafruit FT232H is documented in [docs/ft232h-rf-switch.md](docs/ft232h-rf-switch.md).
+
 ## Run
 
 Requires a current Node.js LTS release.

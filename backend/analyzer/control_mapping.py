@@ -15,6 +15,10 @@ GAIN_STRATEGY_VALUES: dict[str, int] = {
     "high-linearity": HIGH_LINEARITY_PREFERRED,
 }
 
+SAN90_MANUAL_ATTENUATION_STEP_DB = 3
+SAN90_MANUAL_ATTENUATION_MIN_DB = 3
+SAN90_MANUAL_ATTENUATION_MAX_DB = 33
+
 RBW_MODE_VALUES: dict[str, int] = {
     "manual": 0x00,
     "auto": 0x01,
@@ -44,3 +48,18 @@ DETECTOR_VALUES: dict[str, int] = {
 
 def enum_name(values: dict[str, int], native_value: int) -> str | None:
     return next((name for name, value in values.items() if value == native_value), None)
+
+
+def attenuation_readback(
+    actual_attenuation_db: int | None,
+    requested_attenuation_db: int | None,
+) -> tuple[int | None, bool]:
+    """Separate the SDK's actual attenuation from its requested auto/manual mode."""
+    actual = None if actual_attenuation_db in {None, -1} else actual_attenuation_db
+    return actual, requested_attenuation_db is None
+
+
+def normalize_manual_attenuation(requested_db: int) -> int:
+    """Map a manual request to the 3 dB grid verified on SAN-90 hardware."""
+    bounded = max(SAN90_MANUAL_ATTENUATION_MIN_DB, min(SAN90_MANUAL_ATTENUATION_MAX_DB, requested_db))
+    return (bounded // SAN90_MANUAL_ATTENUATION_STEP_DB) * SAN90_MANUAL_ATTENUATION_STEP_DB

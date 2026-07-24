@@ -118,6 +118,7 @@ start_service() {
       setsid env \
         ANALYZER_SOURCE="$source" \
         SAN90_STATUS_HZ="${SAN90_STATUS_HZ:-2}" \
+        SAN90_RF_SWITCH_ENABLED="${SAN90_RF_SWITCH_ENABLED:-true}" \
         python3 -m uvicorn backend.main:app --host 0.0.0.0 --port "$port" \
         >"$log" 2>&1 < /dev/null &
       ;;

@@ -37,6 +37,10 @@ class AnalyzerSource(ABC):
         """Validate and apply settings, returning actual accepted values."""
 
     @abstractmethod
+    def apply_amplitude_offset(self, amplitude_offset_db: float) -> float:
+        """Apply a software display/export correction without reconfiguring hardware."""
+
+    @abstractmethod
     def get_settings_state(self) -> AnalyzerSettingsState:
         """Return requested settings, actual metadata, and configuration generation."""
 

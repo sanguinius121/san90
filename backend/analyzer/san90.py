@@ -19,6 +19,13 @@ import numpy as np
 
 from backend.ai_stream import AiStreamConfig, AiStreamPipeline
 
+from .amplitude_correction import (
+    AMPLITUDE_OFFSET_MAX_DB,
+    AMPLITUDE_OFFSET_MIN_DB,
+    AMPLITUDE_OFFSET_STEP_DB,
+    corrected_amplitude_mapping,
+    validate_amplitude_offset,
+)
 from .base import AnalyzerSource
 from .buffers import IntervalMaxHoldBuffer, LatestFrameBuffer
 from .errors import (
@@ -37,17 +44,15 @@ from .control_mapping import (
     PREAMPLIFIER_VALUES,
     RBW_MODE_VALUES,
     WINDOW_VALUES,
+    attenuation_readback,
     enum_name,
+    normalize_manual_attenuation,
 )
 from .htra import (
     ADAPTIVE,
-    API_LAST_PACKET,
-    API_LAST_PACKET_WITH_TRIGGER_MISSED,
     API_NO_ERROR,
-    API_TRIGGER_MISSED,
     API_WARNING_BUS_TIMEOUT,
     API_WARNING_DATA_NOT_READY,
-    API_WARNING_IF_OVERFLOW,
     BUS_TRIGGER,
     DEVICE_N90_R0,
     FORCED_OFF,
@@ -62,6 +67,7 @@ from .htra import (
     TriggerInfo,
     version_string,
 )
+from .if_overflow import IfOverflowLatch, classify_rta_read_status
 from .models import (
     AnalyzerCapabilities,
     AnalyzerActualSettings,
@@ -69,6 +75,7 @@ from .models import (
     AnalyzerSettingsState,
     DeviceInfo,
     FrameType,
+    NumericRange,
     RuntimeStatus,
     SpectrumFrame,
     SpectrumTemporalFrame,
@@ -238,6 +245,7 @@ class San90Source(AnalyzerSource):
         self._errors = 0
         self._last_error: str | None = None
         self._last_frame_ns: int | None = None
+        self._if_overflow = IfOverflowLatch(hold_seconds=0.9)
         self._started_ns: int | None = None
         self._rate_started_ns: int | None = None
         self._rate_received_baseline = 0
@@ -300,8 +308,15 @@ class San90Source(AnalyzerSource):
             supported_controls=frozenset({
                 "center_frequency_hz", "reference_level_dbm", "attenuation_db",
                 "preamplifier", "gain_strategy", "rbw_hz", "rbw_mode", "window", "detector",
-                "resolution_tradeoff_index",
+                "resolution_tradeoff_index", "amplitude_offset_db",
             }),
+            numeric_ranges={
+                "amplitude_offset_db": NumericRange(
+                    AMPLITUDE_OFFSET_MIN_DB,
+                    AMPLITUDE_OFFSET_MAX_DB,
+                    AMPLITUDE_OFFSET_STEP_DB,
+                ),
+            },
             enum_values={
                 "preamplifier": tuple(PREAMPLIFIER_VALUES),
                 "gain_strategy": tuple(GAIN_STRATEGY_VALUES),
@@ -347,9 +362,24 @@ class San90Source(AnalyzerSource):
             return replace(self._settings)
 
     def apply_settings(self, settings: AnalyzerSettings) -> AnalyzerSettings:
+        if settings.attenuation_db is not None:
+            settings = replace(
+                settings,
+                attenuation_db=normalize_manual_attenuation(settings.attenuation_db),
+                preamplifier="off",
+            )
         self._validate_settings(settings)
         self._require_owner()
         return self._submit(lambda: self._reconfigure_on_owner(settings), command_type="apply_settings", payload=settings)
+
+    def apply_amplitude_offset(self, amplitude_offset_db: float) -> float:
+        self._require_owner()
+        value = validate_amplitude_offset(amplitude_offset_db)
+        return self._submit(
+            lambda: self._apply_amplitude_offset_on_owner(value),
+            command_type="amplitude_offset",
+            payload=value,
+        )
 
     def get_settings_state(self) -> AnalyzerSettingsState:
         with self._state_lock:
@@ -360,7 +390,10 @@ class San90Source(AnalyzerSource):
         if frame_info is None:
             raise AnalyzerStateError("SAN-90 has not been configured")
         mapping = self.latest_raw_amplitude_mapping()
-        attenuation = settings.attenuation_db
+        attenuation, attenuation_automatic = attenuation_readback(
+            settings.attenuation_db,
+            requested.attenuation_db,
+        )
         matched = match_actual_tradeoff_step(
             SAN90_RESOLUTION_TRADEOFF_STEPS,
             actual_rbw_hz=float(settings.rbw_hz or 0.0),
@@ -375,8 +408,8 @@ class San90Source(AnalyzerSource):
                 stop_frequency_hz=float(frame_info.StopFrequency_Hz),
                 span_hz=float(frame_info.StopFrequency_Hz-frame_info.StartFrequency_Hz),
                 reference_level_dbm=settings.reference_level_dbm,
-                attenuation_db=None if attenuation == -1 else attenuation,
-                attenuation_automatic=attenuation == -1,
+                attenuation_db=attenuation,
+                attenuation_automatic=attenuation_automatic,
                 preamplifier=settings.preamplifier,
                 gain_strategy=settings.gain_strategy,
                 rbw_hz=float(settings.rbw_hz or 0.0),
@@ -393,6 +426,7 @@ class San90Source(AnalyzerSource):
                 ),
                 resolution_tradeoff_step_id=matched.id if matched is not None and settings.rbw_mode == "manual" else None,
                 frequency_bin_spacing_hz=float(frame_info.StopFrequency_Hz-frame_info.StartFrequency_Hz) / int(frame_info.FrameWidth),
+                amplitude_offset_db=settings.amplitude_offset_db,
             ),
             configuration_generation=generation,
         )
@@ -502,6 +536,8 @@ class San90Source(AnalyzerSource):
                 source="san90",
                 connected=self._connected,
                 acquisition_running=self._running,
+                if_overflow=self._if_overflow.active(),
+                amplitude_offset_db=self._settings.amplitude_offset_db,
                 sdk_frames_received=self._received,
                 display_frames_published=self._published,
                 frames_replaced=self._spectrum_temporal_exchange.frames_replaced,
@@ -684,6 +720,7 @@ class San90Source(AnalyzerSource):
             self._waterfall_producer = None
             self._spectrum_temporal_accumulator = None
             self._spectrum_temporal_exchange.clear()
+            self._if_overflow.clear()
 
     def _configure_on_owner(self, requested: AnalyzerSettings) -> AnalyzerSettings:
         if not self._connected or not self._device.value:
@@ -726,10 +763,47 @@ class San90Source(AnalyzerSource):
 
         profile_out = RtaProfile()
         frame_info = RtaFrameInfo()
+        logger.info(
+            "rta_configuration_request attenuation_mode=%s requested_attenuation_db=%s "
+            "profile_in_atten=%s preamplifier=%s gain_strategy=%s reference_level_dbm=%.3f if_agc=%s",
+            "auto" if requested.attenuation_db is None else "manual",
+            requested.attenuation_db,
+            int(profile_in.Atten),
+            enum_name(PREAMPLIFIER_VALUES, int(profile_in.Preamplifier)),
+            enum_name(GAIN_STRATEGY_VALUES, int(profile_in.GainStrategy)),
+            float(profile_in.RefLevel_dBm),
+            bool(profile_in.EnableIFAGC),
+        )
         status = int(self._api.lib.RTA_Configuration(
             ct.byref(self._device), ct.byref(profile_in), ct.byref(profile_out), ct.byref(frame_info)
         ))
+        logger.info(
+            "rta_configuration_readback sdk_status=%s profile_out_atten=%s "
+            "preamplifier=%s gain_strategy=%s reference_level_dbm=%.3f if_agc=%s",
+            status,
+            int(profile_out.Atten),
+            enum_name(PREAMPLIFIER_VALUES, int(profile_out.Preamplifier)),
+            enum_name(GAIN_STRATEGY_VALUES, int(profile_out.GainStrategy)),
+            float(profile_out.RefLevel_dBm),
+            bool(profile_out.EnableIFAGC),
+        )
         self._api.require_ok("RTA_Configuration", status)
+        amplifier_state = ct.c_int()
+        attenuator_state = ct.c_int8()
+        signal_path = ct.c_uint8()
+        self._api.lib.Device_GetAmpAttenState(
+            ct.byref(self._device),
+            ct.byref(amplifier_state),
+            ct.byref(attenuator_state),
+            ct.byref(signal_path),
+        )
+        actual_attenuation_db = int(attenuator_state.value)
+        logger.info(
+            "rta_gain_state actual_attenuation_db=%s actual_preamplifier=%s signal_path=%s",
+            actual_attenuation_db,
+            enum_name(PREAMPLIFIER_VALUES, int(amplifier_state.value)),
+            int(signal_path.value),
+        )
         if frame_info.FrameWidth <= 0 or frame_info.PacketFrame <= 0:
             raise AnalyzerConfigurationError(
                 f"RTA returned invalid frame dimensions: {frame_info.PacketFrame}x{frame_info.FrameWidth}"
@@ -773,13 +847,14 @@ class San90Source(AnalyzerSource):
             rbw_mode=enum_name(RBW_MODE_VALUES, int(profile_out.RBWMode)) or requested.rbw_mode,
             vbw_hz=float(profile_out.VBW_Hz),
             reference_level_dbm=float(profile_out.RefLevel_dBm),
-            attenuation_db=int(profile_out.Atten),
+            attenuation_db=actual_attenuation_db,
             preamplifier=enum_name(PREAMPLIFIER_VALUES, int(profile_out.Preamplifier)),
             gain_strategy=enum_name(GAIN_STRATEGY_VALUES, int(profile_out.GainStrategy)),
             if_agc_enabled=bool(profile_out.EnableIFAGC),
             sweep_time_s=float(profile_out.SweepTime),
             window=enum_name(WINDOW_VALUES, int(profile_out.Window)),
             detector=enum_name(DETECTOR_VALUES, int(profile_out.Detector)),
+            amplitude_offset_db=requested.amplitude_offset_db,
         )
         matched_step = match_actual_tradeoff_step(
             SAN90_RESOLUTION_TRADEOFF_STEPS,
@@ -944,6 +1019,25 @@ class San90Source(AnalyzerSource):
             logger.error("AI stream buffer configuration failed; disabling AI output: %s", error)
             self._ai_stream.set_accepting(False)
 
+    def _apply_amplitude_offset_on_owner(self, amplitude_offset_db: float) -> float:
+        value = validate_amplitude_offset(amplitude_offset_db)
+        with self._state_lock:
+            self._settings = replace(self._settings, amplitude_offset_db=value)
+            self._requested_settings = replace(self._requested_settings, amplitude_offset_db=value)
+            temporal = self._spectrum_temporal_accumulator
+            frame_info = self._frame_info
+            generation = self._configuration_generation
+        if temporal is not None:
+            temporal.reset(generation=generation)
+            self._spectrum_temporal_exchange.clear()
+        if frame_info is not None:
+            self._ai_stream.configure(
+                int(frame_info.PacketFrame),
+                int(frame_info.FrameWidth),
+                generation,
+            )
+        return value
+
     def _stop_on_owner(self) -> None:
         if not self._trigger_active:
             return
@@ -977,18 +1071,20 @@ class San90Source(AnalyzerSource):
                 timeouts=diagnostics.timeouts + int(status == API_WARNING_BUS_TIMEOUT),
                 data_not_ready=diagnostics.data_not_ready + int(status == API_WARNING_DATA_NOT_READY),
             )
-        if status in {API_WARNING_BUS_TIMEOUT, API_WARNING_DATA_NOT_READY}:
+        classification = classify_rta_read_status(status)
+        if classification.if_overflow:
+            with self._state_lock:
+                self._if_overflow.note_overflow()
+        if not classification.process_trace and not classification.fatal:
             return
-        if status in {API_LAST_PACKET, API_TRIGGER_MISSED, API_LAST_PACKET_WITH_TRIGGER_MISSED}:
-            return
-        overload = status == API_WARNING_IF_OVERFLOW
-        if status != API_NO_ERROR and not overload:
+        if classification.fatal:
             error = SdkError("RTA_GetRealTimeSpectrum_Raw", status)
             with self._state_lock:
                 self._errors += 1
                 self._last_error = str(error)
                 self._running = False
             return
+        overload = classification.if_overflow
 
         width = int(frame_info.FrameWidth)
         count = int(frame_info.PacketFrame)
@@ -1010,7 +1106,8 @@ class San90Source(AnalyzerSource):
                 self._running = False
             return
 
-        mapping = RawAmplitudeMapping(float(plot.ScaleTodBm), float(plot.OffsetTodBm))
+        hardware_mapping = RawAmplitudeMapping(float(plot.ScaleTodBm), float(plot.OffsetTodBm))
+        mapping = corrected_amplitude_mapping(hardware_mapping, self._settings.amplitude_offset_db)
         statistics_started = time.perf_counter()
         raw_minimum = float(np.min(raw))
         raw_maximum = float(np.max(raw))
@@ -1126,6 +1223,7 @@ class San90Source(AnalyzerSource):
 
     @staticmethod
     def _validate_settings(settings: AnalyzerSettings) -> None:
+        validate_amplitude_offset(settings.amplitude_offset_db)
         if settings.mode != "rta":
             raise UnsupportedSettingError("Phase 5 SAN-90 integration supports only SDK RTA mode")
         if settings.span_hz is not None:

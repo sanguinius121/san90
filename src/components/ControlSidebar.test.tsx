@@ -9,7 +9,8 @@ import canonicalSteps from '../../config/san90-resolution-tradeoff.json'
 
 const capabilities = {
   source: 'san90',
-  supported_controls: ['center_frequency_hz', 'reference_level_dbm', 'attenuation_db', 'preamplifier', 'gain_strategy'],
+  supported_controls: ['center_frequency_hz', 'reference_level_dbm', 'attenuation_db', 'preamplifier', 'gain_strategy', 'amplitude_offset_db'],
+  numeric_ranges: { amplitude_offset_db: { minimum: -100, maximum: 100, step: 1 } },
   center_frequency_min_hz: null,
   center_frequency_max_hz: null,
   center_frequency_step_hz: null,
@@ -49,7 +50,7 @@ const tradeoffCapabilities={...capabilities,
 
 function settings(center = 2.45e9, generation = 1): AnalyzerSettingsApi {
   return {
-    requested: { center_frequency_hz: center, reference_level_dbm: 0, attenuation_db: null, preamplifier: 'off', gain_strategy: 'low-noise', rbw_hz: null, rbw_mode: 'auto', window: null, detector: null },
+    requested: { center_frequency_hz: center, reference_level_dbm: 0, attenuation_db: null, preamplifier: 'off', gain_strategy: 'low-noise', rbw_hz: null, rbw_mode: 'auto', window: null, detector: null, amplitude_offset_db: 0 },
     actual: {
       center_frequency_hz: center,
       start_frequency_hz: center - 50_781_250,
@@ -72,6 +73,7 @@ function settings(center = 2.45e9, generation = 1): AnalyzerSettingsApi {
       resolution_tradeoff_state: 'auto',
       resolution_tradeoff_step_id:null,
       frequency_bin_spacing_hz:30_517.578125,
+      amplitude_offset_db: 0,
     },
     configuration_generation: generation,
   }
@@ -92,6 +94,98 @@ afterEach(() => {
 })
 
 describe('ControlSidebar hardware controls', () => {
+  it('preserves an amplitude-offset draft during polling and commits one verified value', async () => {
+    let current = settings()
+    const offsetRequests: number[] = []
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/analyzer/capabilities')) return json(capabilities)
+      if (url.endsWith('/api/analyzer/settings')) return json(current)
+      if (url.endsWith('/api/analyzer/amplitude/offset') && init?.method === 'PUT') {
+        const request = JSON.parse(String(init.body)) as {amplitude_offset_db:number}
+        offsetRequests.push(request.amplitude_offset_db)
+        current = structuredClone(current)
+        current.requested.amplitude_offset_db = request.amplitude_offset_db
+        current.actual.amplitude_offset_db = request.amplitude_offset_db
+        return json(current)
+      }
+      return json({}, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    useRuntimeStore.setState({ ifOverflow: true })
+    render(<ControlSidebar />)
+
+    const offset = await screen.findByLabelText('Amplitude offset') as HTMLInputElement
+    await waitFor(() => expect(offset.disabled).toBe(false))
+    fireEvent.focus(offset)
+    fireEvent.change(offset, { target: { value: '10' } })
+
+    // A low-rate status poll may update the active store value, but not the draft.
+    useDeviceStore.setState({ amplitudeOffsetDb: -4 })
+    expect(offset.value).toBe('10')
+    expect(offsetRequests).toHaveLength(0)
+
+    fireEvent.keyDown(offset, { key: 'Enter' })
+    await waitFor(() => expect(offsetRequests).toEqual([10]))
+    await waitFor(() => expect(offset.value).toBe('10'))
+    expect(useDeviceStore.getState().referenceDbm).toBe(0)
+    expect(useDeviceStore.getState().attenuationDb).toBe(0)
+    expect(useRuntimeStore.getState().ifOverflow).toBe(true)
+  })
+
+  it('keeps automatic attenuation read-only and preserves a manual draft until verified readback', async () => {
+    let current = settings()
+    current.actual.attenuation_db = 3
+    current.actual.attenuation_automatic = true
+    current.actual.preamplifier = 'auto'
+    const attenuationRequests: Array<{mode:string;attenuation_db?:number}> = []
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/analyzer/capabilities')) return json(capabilities)
+      if (url.endsWith('/api/analyzer/settings')) return json(current)
+      if (url.endsWith('/api/analyzer/amplitude/attenuation') && init?.method === 'PUT') {
+        const request = JSON.parse(String(init.body)) as {mode:string;attenuation_db?:number}
+        attenuationRequests.push(request)
+        current = structuredClone(current)
+        if (request.mode === 'manual') {
+          current.requested.attenuation_db = request.attenuation_db ?? null
+          current.actual.attenuation_automatic = false
+          current.actual.attenuation_db = Math.max(3, Math.floor((request.attenuation_db ?? 3) / 3) * 3)
+          current.actual.preamplifier = 'off'
+        }
+        current.configuration_generation++
+        return json(current)
+      }
+      return json({}, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ControlSidebar />)
+
+    const attenuation = await screen.findByLabelText('Attenuation') as HTMLInputElement
+    const mode = await screen.findByLabelText('Attenuation mode') as HTMLSelectElement
+    await waitFor(() => expect(attenuation.value).toBe('3'))
+    expect(mode.value).toBe('auto')
+    expect(attenuation.disabled).toBe(true)
+
+    fireEvent.change(mode, { target: { value: 'manual' } })
+    await waitFor(() => expect(attenuation.disabled).toBe(false))
+    expect(useDeviceStore.getState().preamplifier).toBe('off')
+
+    fireEvent.click(screen.getByLabelText('Increase Attenuation'))
+    await waitFor(() => expect(attenuation.value).toBe('6'))
+    expect(attenuationRequests.at(-1)).toEqual({ mode: 'manual', attenuation_db: 6 })
+
+    fireEvent.focus(attenuation)
+    fireEvent.change(attenuation, { target: { value: '10' } })
+    useDeviceStore.setState({ attenuationDb: 3 })
+    expect(attenuation.value).toBe('10')
+    expect(attenuationRequests).toHaveLength(2)
+
+    fireEvent.keyDown(attenuation, { key: 'Enter' })
+    await waitFor(() => expect(attenuation.value).toBe('9'))
+    expect(attenuationRequests.at(-1)).toEqual({ mode: 'manual', attenuation_db: 10 })
+  })
+
   it('shows the actual accepted value and exposes a control error without retaining a false value', async () => {
     let current = settings()
     let failNext = false
@@ -120,7 +214,7 @@ describe('ControlSidebar hardware controls', () => {
     failNext = true
     fireEvent.click(screen.getByLabelText('Increase Center frequency'))
     expect((await screen.findByRole('alert')).textContent).toContain('Device rejected frequency')
-    await waitFor(() => expect(center.value).toBe('2.459'))
+    await waitFor(() => expect(center.value).toBe('2.469'))
     expect(useDeviceStore.getState().centerHz).toBe(2.459e9)
   })
 

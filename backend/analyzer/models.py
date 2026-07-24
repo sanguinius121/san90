@@ -146,6 +146,7 @@ class AnalyzerSettings:
     sweep_time_s: float | None = None
     window: str | None = None
     detector: str | None = None
+    amplitude_offset_db: float = 0.0
 
     def updated(self, **changes: object) -> "AnalyzerSettings":
         return replace(self, **changes)
@@ -174,6 +175,7 @@ class AnalyzerActualSettings:
     resolution_tradeoff_state: str = "auto"
     resolution_tradeoff_step_id: str | None = None
     frequency_bin_spacing_hz: float | None = None
+    amplitude_offset_db: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +305,8 @@ class RuntimeStatus:
     source: str
     connected: bool = False
     acquisition_running: bool = False
+    if_overflow: bool = False
+    amplitude_offset_db: float = 0.0
     sdk_frames_received: int = 0
     display_frames_published: int = 0
     frames_replaced: int = 0

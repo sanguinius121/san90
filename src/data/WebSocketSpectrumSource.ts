@@ -30,6 +30,7 @@ export class WebSocketSpectrumSource {
         source: "san90",
         connection: "connecting",
         lastError: undefined,
+        ifOverflow: false,
       });
     this.worker = new Worker(
       new URL("../workers/frameParser.worker.ts", import.meta.url),
@@ -156,6 +157,8 @@ export class WebSocketSpectrumSource {
         }
       } else {
         const status = data.status;
+        if (status.amplitude_offset_db !== undefined)
+          useDeviceStore.getState().set("amplitudeOffsetDb", status.amplitude_offset_db);
         const scale = status.waterfall_raw_scale_db;
         const offset = status.waterfall_raw_offset_dbm;
         const rowsPerSecond =
@@ -171,6 +174,7 @@ export class WebSocketSpectrumSource {
             replacedSnapshots: status.replaced_display_snapshots,
             droppedFrames: status.invalid_frames,
             acquisitionErrors: status.acquisition_errors,
+            ifOverflow: status.if_overflow,
             lastError: status.last_error ?? undefined,
             reconfiguring: status.reconfiguring,
             configurationGeneration: Math.max(
@@ -236,6 +240,7 @@ export class WebSocketSpectrumSource {
           .update({
             connection: "error",
             lastError: "Analyzer connection closed",
+            ifOverflow: false,
           });
       this.socket = null;
     };
@@ -253,6 +258,6 @@ export class WebSocketSpectrumSource {
     }
     this.worker?.terminate();
     this.worker = null;
-    useRuntimeStore.getState().update({ connection: "stopped" });
+    useRuntimeStore.getState().update({ connection: "stopped", ifOverflow: false });
   }
 }

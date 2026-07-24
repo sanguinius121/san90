@@ -343,6 +343,44 @@ class AnalyzerService:
                 self._sync_waterfall_config(source)
             return asdict(source.get_settings_state())
 
+    async def apply_amplitude_offset(self, amplitude_offset_db: float) -> dict[str, Any]:
+        """Apply application calibration without an SDK reconfiguration."""
+        if self.source is None:
+            raise ControlError(
+                ControlErrorCode.DEVICE_NOT_CONNECTED,
+                "Analyzer source is not initialized",
+                recoverable=True,
+            )
+        async with self._control_lock:
+            source = self.source
+            capabilities = source.get_capabilities()
+            if "amplitude_offset_db" not in capabilities.supported_controls:
+                raise ControlError(
+                    ControlErrorCode.UNSUPPORTED_SETTING,
+                    f"amplitude_offset_db is not supported by {capabilities.source}",
+                    requested_value=amplitude_offset_db,
+                    recoverable=True,
+                )
+            try:
+                await asyncio.to_thread(source.apply_amplitude_offset, amplitude_offset_db)
+            except ControlError:
+                raise
+            except ValueError as error:
+                raise ControlError(
+                    ControlErrorCode.VALUE_OUT_OF_RANGE,
+                    str(error),
+                    requested_value=amplitude_offset_db,
+                    recoverable=True,
+                ) from error
+            except Exception as error:
+                raise ControlError(
+                    ControlErrorCode.SDK_CONFIGURATION_FAILED,
+                    str(error),
+                    requested_value=amplitude_offset_db,
+                    recoverable=True,
+                ) from error
+            return asdict(source.get_settings_state())
+
     async def apply_resolution_tradeoff(self, index: int) -> dict[str, Any]:
         if self.source is None:
             raise ControlError(ControlErrorCode.DEVICE_NOT_CONNECTED, "Analyzer source is not initialized", recoverable=True)

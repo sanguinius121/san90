@@ -17,4 +17,14 @@ describe('browser temporal simulator',()=>{
       expect(batch.latest).toHaveLength(208);expect(batch.maximum).toHaveLength(208);expect(batch.waterfallRows).toHaveLength(rows*208)
     }
   })
+  it('applies the simulator amplitude offset exactly once to latest and maximum traces',()=>{
+    vi.spyOn(Math,'random').mockReturnValue(.5)
+    const baseline=generateMockTemporalBatch(208,2,-10,2,0)
+    const corrected=generateMockTemporalBatch(208,2,-10,2,10)
+    for(let index=0;index<208;index++){
+      expect(corrected.latest[index]-baseline.latest[index]).toBeCloseTo(10,5)
+      expect(corrected.maximum[index]-baseline.maximum[index]).toBeCloseTo(10,5)
+    }
+    vi.restoreAllMocks()
+  })
 })

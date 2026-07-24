@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -15,18 +16,27 @@ from pydantic import BaseModel, field_validator
 from fastapi.exceptions import RequestValidationError
 
 from backend.api.service import AnalyzerService
+from backend.analyzer.amplitude_correction import validate_amplitude_offset
 from backend.analyzer.errors import ControlError, ControlErrorCode
+from backend.hardware.rf_switch import RfSwitchManager
+from backend.hardware.rf_switch.errors import RfSwitchError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 service = AnalyzerService()
+rf_switch = RfSwitchManager()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await service.start()
+    await asyncio.to_thread(rf_switch.start)
     try:
         yield
     finally:
+        # RF8 is restored before releasing the USB controller. This subsystem
+        # is independent of analyzer acquisition and shutdown errors are
+        # intentionally contained by the manager.
+        await asyncio.to_thread(rf_switch.stop)
         await service.stop(disconnect=True)
 
 
@@ -59,6 +69,15 @@ class ReferenceLevelRequest(BaseModel):
         if not math.isfinite(value):
             raise ValueError("reference_level_dbm must be finite")
         return value
+
+
+class AmplitudeOffsetRequest(BaseModel):
+    amplitude_offset_db: float
+
+    @field_validator("amplitude_offset_db")
+    @classmethod
+    def valid_offset(cls, value: float) -> float:
+        return validate_amplitude_offset(value)
 
 
 class AttenuationRequest(BaseModel):
@@ -109,6 +128,10 @@ class AiPowerProfileRequest(BaseModel):
     profile: str
 
 
+class RfPathRequest(BaseModel):
+    path: str
+
+
 @app.exception_handler(ControlError)
 async def control_error_handler(_: Request, error: ControlError) -> JSONResponse:
     validation_codes = {
@@ -126,6 +149,14 @@ async def control_error_handler(_: Request, error: ControlError) -> JSONResponse
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(_: Request, error: RequestValidationError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"error": {"code": ControlErrorCode.VALUE_OUT_OF_RANGE.value, "message": error.errors()[0].get("msg", "Invalid control value"), "sdk_status": None, "requested_value": None, "previous_actual_value": None, "recoverable": True}})
+
+
+@app.exception_handler(RfSwitchError)
+async def rf_switch_error_handler(_: Request, error: RfSwitchError) -> JSONResponse:
+    return JSONResponse(
+        status_code=error.http_status,
+        content={"detail": {"code": error.code, "message": str(error)}},
+    )
 
 
 @app.get("/api/analyzer/source")
@@ -146,6 +177,24 @@ async def capabilities() -> dict[str, object]:
 @app.get("/api/analyzer/settings")
 async def settings() -> dict[str, object]:
     return service.settings_payload()
+
+
+@app.get("/api/rf-switch/capabilities")
+async def rf_switch_capabilities() -> dict[str, object]:
+    return rf_switch.capabilities()
+
+
+@app.get("/api/rf-switch/status")
+async def rf_switch_status() -> dict[str, object]:
+    return (await asyncio.to_thread(rf_switch.refresh)).as_dict()
+
+
+@app.put("/api/rf-switch/path")
+async def rf_switch_path(request: RfPathRequest) -> dict[str, object]:
+    try:
+        return (await asyncio.to_thread(rf_switch.set_path, request.path)).as_dict()
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/api/ai-stream/status")
@@ -191,6 +240,11 @@ async def frequency(request: FrequencyRequest) -> dict[str, object]:
 @app.put("/api/analyzer/amplitude/reference-level")
 async def reference_level(request: ReferenceLevelRequest) -> dict[str, object]:
     return await service.apply_control(reference_level_dbm=request.reference_level_dbm)
+
+
+@app.put("/api/analyzer/amplitude/offset")
+async def amplitude_offset(request: AmplitudeOffsetRequest) -> dict[str, object]:
+    return await service.apply_amplitude_offset(request.amplitude_offset_db)
 
 
 @app.put("/api/analyzer/amplitude/attenuation")
