@@ -1,5 +1,6 @@
 import { SpectrogramPanel } from "./SpectrogramPanel";
 import { SpectrumPanel } from "./SpectrumPanel";
+import { AiAnnotationStrip } from "./AiAnnotationStrip";
 import { ToolRail } from "./ToolRail";
 import { ControlSidebar } from "./ControlSidebar";
 import { useRuntimeStore } from "../stores";
@@ -131,6 +132,7 @@ export function AppLayout() {
       <main className="app-grid">
         <div className="measurement-area">
           <SpectrogramPanel />
+          <AiAnnotationStrip />
           <SpectrumPanel />
         </div>
         <ToolRail />

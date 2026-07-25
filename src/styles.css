@@ -117,7 +117,7 @@ button {
 }
 .measurement-area {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   border-right: 1px solid #41505b;
@@ -128,9 +128,8 @@ button {
   min-height: 0;
   background: #080c10;
 }
-.plot-panel + .plot-panel {
-  border-top: 2px solid #43525e;
-  grid-template-rows: 37px minmax(0, 1fr) 31px;
+.spectrum-panel {
+  grid-template-rows: minmax(0, 1fr) 31px;
 }
 .plot-header {
   display: flex;
@@ -158,6 +157,57 @@ button {
   font: 700 var(--ui-font-10) "IBM Plex Mono";
   letter-spacing: 0.8px;
   box-shadow: 0 0 8px rgba(255, 35, 45, 0.45);
+}
+.spectrum-warning-overlay {
+  position: absolute;
+  z-index: 4;
+  top: 6px;
+  right: 10px;
+  pointer-events: none;
+}
+.ai-annotation-strip {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  background: #10171c;
+  border-top: 1px solid #43525e;
+  border-bottom: 1px solid #43525e;
+  transition: height 80ms linear;
+}
+.ai-annotation-strip svg {
+  display: block;
+}
+.ai-annotation {
+  color: #3fa9ff;
+}
+.ai-annotation--medium {
+  color: #f2cf35;
+}
+.ai-annotation--high {
+  color: #ff5959;
+}
+.ai-annotation__range {
+  fill: currentColor;
+  fill-opacity: 0.13;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+.ai-annotation line {
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.ai-annotation__label-bg {
+  fill: #10171c;
+  fill-opacity: 0.9;
+  stroke: currentColor;
+  stroke-width: 0.75;
+}
+.ai-annotation text {
+  fill: #edf4f8;
+  font: 500 11px "IBM Plex Mono", monospace;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
 }
 .plot-title {
   font: 600 var(--ui-font-11) "IBM Plex Mono";
@@ -446,6 +496,18 @@ button {
   font-style: normal;
   color: #5fcde8;
   margin-left: 3px;
+}
+.control-row .numeric-control .numeric-unit-select {
+  flex: 0 0 52px;
+  width: 52px;
+  height: 24px;
+  margin-left: 4px;
+  padding: 0 14px 0 4px;
+  border: 0;
+  border-left: 1px solid #3b4b55;
+  background-color: transparent;
+  color: #5fcde8;
+  font: var(--ui-font-9) "IBM Plex Mono";
 }
 .numeric-control button {
   border: 0;

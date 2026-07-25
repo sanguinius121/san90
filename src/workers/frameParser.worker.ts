@@ -7,7 +7,10 @@ workerScope.onmessage = (event: MessageEvent<ArrayBuffer>) => {
   try {
     const parsed = parseAnalyzerMessage(event.data)
     if (parsed.kind === 'status') currentGeneration = Math.max(currentGeneration, parsed.status.configuration_generation)
-    else if (parsed.frame.configurationGeneration < currentGeneration) {
+    else if (parsed.kind === 'ai-detections') {
+      workerScope.postMessage(parsed)
+      return
+    } else if (parsed.frame.configurationGeneration < currentGeneration) {
       workerScope.postMessage({ rejected: 'stale', kind: parsed.kind })
       return
     } else currentGeneration = parsed.frame.configurationGeneration

@@ -1,6 +1,7 @@
 # SAN-90 Spectrum Console — project status and handoff
 
-Last updated: 2026-07-24  
+Last updated: 2026-07-25
+
 Repository: `/home/tuancoi/san90`  
 Snapshot commit: `dc63492c9876708e5b726d8ed60d41197a0c61ab`
 
@@ -52,6 +53,8 @@ The following major features are implemented:
 - Recoverable IF-overflow warning.
 - FT232H RF-path selection with fail-safe RF8 initialization and reconnect.
 - Bounded 640×640 GRAY8 ZeroMQ image output for an external AI service.
+- A bounded port-5558 AI-result subscriber and compact, frequency-aligned
+  current-detection strip between the spectrogram and spectrum.
 - Managed frontend/backend start and stop, including guarded SAN-90 USB reset
   for handoff to SAStudio.
 
@@ -137,6 +140,9 @@ while still max-holding every native trace. See
 
 - Center frequency keeps a local input draft while editing, so hardware polling
   cannot overwrite typing. It commits only on the existing explicit action.
+- Its display unit defaults to GHz and can switch between GHz and MHz without
+  changing the canonical Hz value or reconfiguring hardware. Validation and
+  the backend request remain in Hz.
 - Reference-level `+` and `-` use a 10 dB step.
 - The verified actual reference level drives the spectrum Y-axis maximum.
 - Spectrum dynamic range is retained at 100 dB; current and temporal/max traces
@@ -219,18 +225,19 @@ Power profiles are selected with `AI_POWER_PROFILE` or
 The external service at `AI services/AI-for-san90/yolo_detection.py`:
 
 - connects a ZeroMQ PULL socket to port 5557;
-- runs `best.pt`;
+- runs the selected YOLO weights or exported OpenVINO model;
 - publishes detection JSON on `tcp://127.0.0.1:5558`;
 - writes its latest JSON result under its runtime data directory.
 
 Important limitations:
 
-- The main web application does not yet subscribe to port 5558 or display AI
-  detections.
-- On the previous machine CUDA was unavailable. CPU inference used roughly six
-  cores, produced about 1.9 detections/s, and results could become 13–33 seconds
-  stale under load.
-- The detector's frequency-label history currently grows without a bound.
+- The backend forwards current-frame per-detection frequency bounds through
+  WebSocket type `0x11`; the browser holds annotations for 800 ms and does not
+  consume the detector's accumulated `label_freq_ranges_hz` field.
+- The detector's legacy frequency-label range history expands across tuning
+  changes and remains unsuitable as a current detection result.
+- OpenVINO on the verified Intel Arc integrated GPU sustained the 10 result/s
+  input target with short latency; revalidate performance on other machines.
 - The detector is not managed by `scripts/manage-services.sh`.
 - Its requirements file pins older package versions than the manually installed
   environment previously used. Revalidate Torch/Torchvision/Ultralytics/OpenCV
@@ -265,6 +272,7 @@ dirty; do not commit runtime artifacts.
 - Version 3, type `0x03`: batched row-major uint8 waterfall.
 - Version 4, type `0x02`: latest float32 trace plus interval-max float32 trace.
 - Runtime status is type `0x10`.
+- Current-frame AI frequency detections are version 2, type `0x11`.
 
 All formats are little-endian and generation-aware. The browser Web Worker
 validates magic, version, sizes, point counts, numeric metadata, and stale
@@ -474,15 +482,12 @@ These observations are transient and should be re-queried.
 
 1. Make the external AI repository reproducible on a fresh clone by adding
    correct submodule metadata or vendoring it intentionally.
-2. Add a managed AI-service command, health/staleness reporting, and bounded
-   detector-side history.
-3. Integrate port-5558 detection results into the backend/frontend only after
-   defining a versioned result contract and stale-result policy.
-4. Profile or enable GPU inference; the previous CPU-only detector lag was too
-   high for real-time UI use.
-5. Keep VBW, IF AGC, sweep-time, and hardware span deferred until SDK behavior
+2. Add a managed AI-service command and explicit detector health reporting.
+3. Remove or generation-scope the detector's legacy accumulated frequency
+   ranges; the web strip already ignores them.
+4. Keep VBW, IF AGC, sweep-time, and hardware span deferred until SDK behavior
    is measured rather than guessed.
-6. Revalidate FT232H reconnect on each target machine's USB permissions and
+5. Revalidate FT232H reconnect on each target machine's USB permissions and
    udev configuration.
 
 ## Canonical documentation

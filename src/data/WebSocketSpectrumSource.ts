@@ -1,4 +1,5 @@
 import { liveFrames } from "./liveFrames";
+import { aiDetections } from "./aiDetections";
 import { useDeviceStore, useRuntimeStore } from "../stores";
 import type { ParsedAnalyzerMessage } from "./binaryProtocol";
 import { acceptsConfigurationGeneration } from "./binaryProtocol";
@@ -155,6 +156,8 @@ export class WebSocketSpectrumSource {
             });
           this.lastWaterfallMetrics = now;
         }
+      } else if (data.kind === "ai-detections") {
+        aiDetections.publish(data.result);
       } else {
         const status = data.status;
         if (status.amplitude_offset_db !== undefined)
@@ -258,6 +261,7 @@ export class WebSocketSpectrumSource {
     }
     this.worker?.terminate();
     this.worker = null;
+    aiDetections.clear();
     useRuntimeStore.getState().update({ connection: "stopped", ifOverflow: false });
   }
 }

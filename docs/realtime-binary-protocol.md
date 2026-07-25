@@ -40,6 +40,7 @@ Message types:
 - `0x03`, version 2: legacy interval native max-hold waterfall row, uint8, `point_count` bytes.
 - `0x03`, version 3: native max-hold waterfall batch, contiguous row-major uint8, `row_count × point_count` bytes.
 - `0x10`: runtime status, UTF-8 JSON. Point count and measurement fields in the JSON are authoritative for status.
+- `0x11`: current-frame AI frequency detections, UTF-8 JSON with `point_count = 0`.
 - `0x12`: reserved for device errors.
 
 Validation requirements:
@@ -51,6 +52,40 @@ Validation requirements:
 - spectrum values must be finite;
 - `device_timestamp_ns` is not used for frame age because the connected SAN-90 clock is not aligned with host Unix time;
 - host receipt time is used for logs/UI time, while local monotonic receipt time remains backend-internal for freshness and latency.
+
+### Current-frame AI detections (`0x11`)
+
+The backend's latest-only ZeroMQ subscriber receives one JSON result from
+`tcp://127.0.0.1:5558`, validates it, and forwards it in the version-2 JSON
+envelope. The payload is:
+
+```json
+{
+  "sequence": 123,
+  "timestamp_ns": 1784947230410329302,
+  "generated_at": 1784947230.4379168,
+  "received_at_ns": 1784947230439000000,
+  "detections": [
+    {
+      "class_id": 4,
+      "label": "DJI_20MHz",
+      "confidence": 0.86,
+      "frequency_start": 5731000000.0,
+      "frequency_stop": 5751000000.0
+    }
+  ]
+}
+```
+
+Each message replaces the prior current-frame result. `frequency_start` and
+`frequency_stop` are absolute Hz values for that detection. The subscriber
+does not forward or derive UI annotations from the detector's legacy
+`label_freq_ranges_hz` history because that field may span old center-frequency
+configurations. Client mailboxes retain at most one unsent `0x11` message.
+
+The subscriber is enabled by default. `AI_DETECTION_SUB_URL` overrides the
+endpoint, and `AI_DETECTION_SUB_ENABLED=false` disables it. ZeroMQ reconnect is
+independent of analyzer acquisition.
 
 ## Version 3 waterfall batch header
 

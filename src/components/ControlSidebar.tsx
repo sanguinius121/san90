@@ -9,6 +9,13 @@ import { ResolutionTradeoffControl } from './controls/ResolutionTradeoffControl'
 import canonicalSteps from '../../config/san90-resolution-tradeoff.json'
 import type { ResolutionTradeoffStepApi } from '../data/controlApi'
 import { RfPathControl } from './controls/RfPathControl'
+import {
+  CENTER_FREQUENCY_UNITS,
+  centerFrequencyPrecision,
+  displayValueToHz,
+  hzToDisplayValue,
+  type CenterFrequencyUnit,
+} from '../data/frequencyUnits'
 
 const options = (values: [string,string][]) => values.map(([label,value])=>({label,value}))
 export const REFERENCE_LEVEL_STEP_DB = 10
@@ -28,14 +35,18 @@ function applyAnalyzerState(state:AnalyzerSettingsApi) {
 
 export function ControlSidebar() {
   const d=useDeviceStore(); const set=d.set; const runtime=useRuntimeStore(); const hardware=runtime.source==='san90'
-  const [capabilities,setCapabilities]=useState<AnalyzerCapabilitiesApi>(localCapabilities); const [loading,setLoading]=useState(hardware); const [controlRevision,setControlRevision]=useState(0)
+  const [capabilities,setCapabilities]=useState<AnalyzerCapabilitiesApi>(localCapabilities); const [loading,setLoading]=useState(hardware); const [controlRevision,setControlRevision]=useState(0); const [centerUnit,setCenterUnit]=useState<CenterFrequencyUnit>('GHz')
   const supported=(name:string)=>capabilities.supported_controls.includes(name)
   const applyState=useCallback((state:AnalyzerSettingsApi)=>{applyAnalyzerState(state);setControlRevision(revision=>revision+1)},[])
   useEffect(()=>{let active=true;if(!hardware)return
     Promise.all([analyzerApi.capabilities(),analyzerApi.settings()]).then(([caps,state])=>{if(active){setCapabilities(caps);applyState(state);useRuntimeStore.getState().update({lastError:undefined})}}).catch(error=>{if(active)useRuntimeStore.getState().update({lastError:error instanceof Error?error.message:'Unable to load analyzer controls'})}).finally(()=>{if(active)setLoading(false)});return()=>{active=false}
   },[hardware,applyState])
   const commit=async(path:string,body:object,local:()=>void)=>{if(!hardware){local();return}useRuntimeStore.getState().update({reconfiguring:true,lastError:undefined});try{const response=await analyzerApi.put<AnalyzerSettingsApi|{settings:AnalyzerSettingsApi}>(path,body);applyState('settings'in response?response.settings:response)}catch(error){useRuntimeStore.getState().update({lastError:error instanceof Error?error.message:'Configuration failed'});try{applyState(await analyzerApi.settings())}catch{ /* retain the original control error */ }}finally{useRuntimeStore.getState().update({reconfiguring:false})}}
-  const commitCenterFrequency=async(valueGHz:number):Promise<number|false>=>{if(!hardware){set('centerHz',valueGHz*1e9);return valueGHz}useRuntimeStore.getState().update({reconfiguring:true,lastError:undefined});try{const response=await analyzerApi.put<{settings:AnalyzerSettingsApi}|AnalyzerSettingsApi>('/api/analyzer/frequency',{center_frequency_hz:valueGHz*1e9});const state='settings'in response?response.settings:response;applyState(state);return state.actual.center_frequency_hz/1e9}catch(error){useRuntimeStore.getState().update({lastError:error instanceof Error?error.message:'Configuration failed'});try{applyState(await analyzerApi.settings())}catch{/* preserve the original error */}return false}finally{useRuntimeStore.getState().update({reconfiguring:false})}}
+  const centerMinimumHz=capabilities.center_frequency_min_hz??1
+  const centerMaximumHz=capabilities.center_frequency_max_hz??Number.MAX_SAFE_INTEGER
+  const validCenterDisplayValue=(value:number)=>{const hz=displayValueToHz(value,centerUnit);return Number.isFinite(hz)&&hz>0&&hz>=centerMinimumHz&&hz<=centerMaximumHz}
+  const rejectCenterFrequency=()=>useRuntimeStore.getState().update({lastError:`Center frequency must be between ${centerMinimumHz} Hz and ${centerMaximumHz} Hz`})
+  const commitCenterFrequency=async(value:number):Promise<number|false>=>{const valueHz=displayValueToHz(value,centerUnit);if(!validCenterDisplayValue(value)){rejectCenterFrequency();return false}if(!hardware){set('centerHz',valueHz);useRuntimeStore.getState().update({lastError:undefined});return hzToDisplayValue(valueHz,centerUnit)}useRuntimeStore.getState().update({reconfiguring:true,lastError:undefined});try{const response=await analyzerApi.put<{settings:AnalyzerSettingsApi}|AnalyzerSettingsApi>('/api/analyzer/frequency',{center_frequency_hz:valueHz});const state='settings'in response?response.settings:response;applyState(state);return hzToDisplayValue(state.actual.center_frequency_hz,centerUnit)}catch(error){useRuntimeStore.getState().update({lastError:error instanceof Error?error.message:'Configuration failed'});try{applyState(await analyzerApi.settings())}catch{/* preserve the original error */}return false}finally{useRuntimeStore.getState().update({reconfiguring:false})}}
   const commitManualAttenuation=async(valueDb:number):Promise<number|false>=>{if(!hardware){set('attenuationDb',valueDb);return valueDb}useRuntimeStore.getState().update({reconfiguring:true,lastError:undefined});try{const response=await analyzerApi.put<AnalyzerSettingsApi|{settings:AnalyzerSettingsApi}>('/api/analyzer/amplitude/attenuation',{mode:'manual',attenuation_db:valueDb});const state='settings'in response?response.settings:response;applyState(state);return state.actual.attenuation_db??false}catch(error){useRuntimeStore.getState().update({lastError:error instanceof Error?error.message:'Configuration failed'});try{applyState(await analyzerApi.settings())}catch{/* preserve the entered draft and original error */}return false}finally{useRuntimeStore.getState().update({reconfiguring:false})}}
   const commitAmplitudeOffset=async(valueDb:number):Promise<number|false>=>{if(!hardware){set('amplitudeOffsetDb',valueDb);return valueDb}useRuntimeStore.getState().update({reconfiguring:true,lastError:undefined});try{const response=await analyzerApi.put<AnalyzerSettingsApi|{settings:AnalyzerSettingsApi}>('/api/analyzer/amplitude/offset',{amplitude_offset_db:valueDb});const state='settings'in response?response.settings:response;applyState(state);return state.actual.amplitude_offset_db??false}catch(error){useRuntimeStore.getState().update({lastError:error instanceof Error?error.message:'Configuration failed'});return false}finally{useRuntimeStore.getState().update({reconfiguring:false})}}
   const disabled=loading||runtime.reconfiguring
@@ -50,7 +61,7 @@ export function ControlSidebar() {
     <div className="sidebar-scroll">
       {runtime.lastError&&<div className="control-error" role="alert">{runtime.lastError}</div>}
       <ControlSection title="Frequency">
-        <NumericControl label="Center frequency" value={d.centerHz/1e9} unit="GHz" step={d.stepHz/1e9} min={(capabilities.center_frequency_min_hz??1)/1e9} max={(capabilities.center_frequency_max_hz??Number.MAX_SAFE_INTEGER)/1e9} precision={6} resetToken={controlRevision} verifiedCommit disabled={disabled||!supported('center_frequency_hz')} onChange={commitCenterFrequency}/>
+        <NumericControl label="Center frequency" value={hzToDisplayValue(d.centerHz,centerUnit)} unit={centerUnit} unitOptions={CENTER_FREQUENCY_UNITS} unitPrecisions={{GHz:9,MHz:6}} onUnitChange={unit=>setCenterUnit(unit as CenterFrequencyUnit)} convertUnitValue={(value,fromUnit,toUnit)=>hzToDisplayValue(displayValueToHz(value,fromUnit as CenterFrequencyUnit),toUnit as CenterFrequencyUnit)} step={hzToDisplayValue(d.stepHz,centerUnit)} precision={centerFrequencyPrecision(centerUnit)} resetToken={controlRevision} verifiedCommit validateValue={validCenterDisplayValue} onInvalid={rejectCenterFrequency} disabled={disabled||!supported('center_frequency_hz')} onChange={commitCenterFrequency}/>
         <NumericControl label="Step frequency" value={d.stepHz/1e6} unit="MHz" step={1} min={.001} max={1000} precision={3} disabled={disabled} onChange={(v)=>set('stepHz',v*1e6)}/>
       </ControlSection>
       <ControlSection title="RF Path"><RfPathControl/></ControlSection>

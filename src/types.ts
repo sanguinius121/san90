@@ -4,6 +4,22 @@ export type ToolMode = 'graph' | 'trace' | 'peak' | 'marker' | 'pan' | 'zoom'
 export type SelectOption = { label: string; value: string }
 export type Marker = { bin: number; frequencyHz: number; amplitudeDbm: number }
 
+export interface AiFrequencyDetection {
+  label: string
+  confidence: number
+  frequencyStartHz: number
+  frequencyStopHz: number
+  classId?: number
+}
+
+export interface AiDetectionResult {
+  sequence: number | null
+  timestampNs: number | null
+  generatedAt: number | null
+  receivedAtNs: number | null
+  detections: AiFrequencyDetection[]
+}
+
 export interface SpectrumFrame {
   sequence: number
   timestamp: number

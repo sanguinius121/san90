@@ -35,6 +35,18 @@ function temporalSpectrum(pointCount:number):ArrayBuffer{
   return buffer
 }
 
+function aiDetections():ArrayBuffer{
+  const payload=new TextEncoder().encode(JSON.stringify({
+    sequence:12,timestamp_ns:1_784_947_230_410_329_302,generated_at:1_784_947_230.4,received_at_ns:1_784_947_230_420_000_000,
+    detections:[{class_id:4,label:'DJI_20MHz',confidence:.86,frequency_start:5.731e9,frequency_stop:5.751e9}],
+  }))
+  const buffer=new ArrayBuffer(96+payload.length),bytes=new Uint8Array(buffer),view=new DataView(buffer);bytes.set([83,65,78,57]);bytes.set(payload,96)
+  view.setUint8(4,2);view.setUint8(5,0x11);view.setUint8(6,2);view.setUint8(7,3);view.setUint16(8,96,true)
+  view.setBigUint64(12,12n,true);view.setBigUint64(28,1n,true);view.setUint32(48,payload.length,true)
+  view.setFloat64(52,0,true);view.setFloat64(60,0,true);view.setFloat64(68,1,true);view.setFloat64(76,1,true)
+  return buffer
+}
+
 describe('binary analyzer protocol', () => {
   it('parses an actual 3328-point float32 SAN-90 spectrum', () => {
     const parsed = parseAnalyzerMessage(frame(1, 3328))
@@ -108,5 +120,10 @@ describe('binary analyzer protocol', () => {
   it('rejects malformed temporal spectrum dimensions',()=>{
     const malformed=temporalSpectrum(8);new DataView(malformed).setUint32(60,0,true)
     expect(()=>parseAnalyzerMessage(malformed)).toThrow(/dimensions/)
+  })
+  it('parses current-frame AI frequency detections',()=>{
+    const parsed=parseAnalyzerMessage(aiDetections());expect(parsed.kind).toBe('ai-detections');if(parsed.kind!=='ai-detections')return
+    expect(parsed.result.sequence).toBe(12)
+    expect(parsed.result.detections).toEqual([{classId:4,label:'DJI_20MHz',confidence:.86,frequencyStartHz:5.731e9,frequencyStopHz:5.751e9}])
   })
 })

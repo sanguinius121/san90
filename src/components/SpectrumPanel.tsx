@@ -228,19 +228,6 @@ export function SpectrumPanel() {
   };
   return (
     <section className="plot-panel spectrum-panel">
-      <header className="plot-header">
-        <div>
-          <span className="plot-title">SPECTRUM</span>
-          <span className="plot-subtitle">LIVE DENSITY</span>
-        </div>
-        <div className="plot-header-actions">
-          <IfOverflowWarning />
-          <div className="trace-key">
-            <span />
-            <b>T1</b> CLEAR / WRITE
-          </div>
-        </div>
-      </header>
       <div
         className="plot-stage interactive"
         onWheel={onWheel}
@@ -255,6 +242,7 @@ export function SpectrumPanel() {
       >
         <canvas ref={glRef} />
         <canvas className="overlay-canvas" ref={overlayRef} />
+        <div className="spectrum-warning-overlay"><IfOverflowWarning /></div>
         {error && <div className="plot-error">{error}</div>}
       </div>
       <SpectrumStatusBar />

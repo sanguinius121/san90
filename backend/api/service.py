@@ -32,8 +32,9 @@ from backend.analyzer.tradeoff import (
     validate_tradeoff_index,
     visible_rows,
 )
+from backend.ai_detection import AiDetectionSubscriber
 
-from .protocol import MESSAGE_SPECTRUM, MESSAGE_SPECTRUM_TEMPORAL, MESSAGE_STATUS, MESSAGE_WATERFALL, pack_spectrum, pack_spectrum_temporal, pack_status, pack_waterfall, pack_waterfall_batch
+from .protocol import MESSAGE_AI_DETECTIONS, MESSAGE_SPECTRUM, MESSAGE_SPECTRUM_TEMPORAL, MESSAGE_STATUS, MESSAGE_WATERFALL, pack_ai_detections, pack_spectrum, pack_spectrum_temporal, pack_status, pack_waterfall, pack_waterfall_batch
 
 logger = logging.getLogger("san90.backend")
 
@@ -43,6 +44,18 @@ def _positive_rate(name: str, default: float) -> float:
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be finite and positive")
     return value
+
+
+def _enabled(name: str, default: bool = True) -> bool:
+    text = os.getenv(name)
+    if text is None:
+        return default
+    normalized = text.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 class ClientMailbox:
@@ -90,6 +103,13 @@ class AnalyzerService:
         self.clients: set[ClientMailbox] = set()
         self.running = False
         self._pump_task: asyncio.Task[None] | None = None
+        self._ai_detection_subscriber = (
+            AiDetectionSubscriber(os.getenv("AI_DETECTION_SUB_URL", "tcp://127.0.0.1:5558"))
+            if _enabled("AI_DETECTION_SUB_ENABLED")
+            else None
+        )
+        self._ai_detection_task: asyncio.Task[None] | None = None
+        self._ai_detection_sequence = 0
         self._status_sequence = 0
         self.spectrum_snapshots = 0
         self.waterfall_snapshots = 0
@@ -140,9 +160,24 @@ class AnalyzerService:
         self.running = True
         if self._pump_task is None or self._pump_task.done():
             self._pump_task = asyncio.create_task(self._pump(), name="analyzer-display-pump")
+        if self._ai_detection_subscriber is not None and (
+            self._ai_detection_task is None or self._ai_detection_task.done()
+        ):
+            self._ai_detection_task = asyncio.create_task(
+                self._ai_detection_subscriber.run(self.publish_ai_detection_result),
+                name="ai-detection-subscriber",
+            )
 
     async def stop(self, *, disconnect: bool = False) -> None:
         self.running = False
+        ai_task = self._ai_detection_task
+        self._ai_detection_task = None
+        if ai_task is not None:
+            ai_task.cancel()
+            try:
+                await ai_task
+            except asyncio.CancelledError:
+                pass
         task = self._pump_task
         self._pump_task = None
         if task is not None:
@@ -179,6 +214,13 @@ class AnalyzerService:
     def offer(self, message_type: int, message: bytes) -> None:
         for client in tuple(self.clients):
             client.offer(message_type, message)
+
+    def publish_ai_detection_result(self, result: dict[str, Any]) -> None:
+        self._ai_detection_sequence += 1
+        self.offer(
+            MESSAGE_AI_DETECTIONS,
+            pack_ai_detections(self.source_name, self._ai_detection_sequence, result),
+        )
 
     def mark_sent(self, message: bytes) -> None:
         size = len(message)

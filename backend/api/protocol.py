@@ -6,6 +6,7 @@ import json
 import math
 import struct
 import time
+from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -23,6 +24,7 @@ MESSAGE_SPECTRUM = 0x01
 MESSAGE_SPECTRUM_TEMPORAL = 0x02
 MESSAGE_WATERFALL = 0x03
 MESSAGE_STATUS = 0x10
+MESSAGE_AI_DETECTIONS = 0x11
 MESSAGE_ERROR = 0x12
 
 SOURCE_SIMULATOR = 0x01
@@ -211,8 +213,7 @@ def pack_waterfall_batch(source: str, batch: WaterfallBatch) -> bytes:
     ) + payload
 
 
-def pack_status(source: str, sequence: int, status: Any) -> bytes:
-    data = asdict(status) if is_dataclass(status) else status
+def _pack_json_message(message_type: int, source: str, sequence: int, data: Any) -> bytes:
     payload = json.dumps(data, separators=(",", ":"), allow_nan=False).encode("utf-8")
     metadata = RawTraceMetadata(
         sequence=sequence,
@@ -228,7 +229,16 @@ def pack_status(source: str, sequence: int, status: Any) -> bytes:
         mapping=RawAmplitudeMapping(1.0, 0.0),
         configuration_generation=int(data.get("configuration_generation", 0)) if isinstance(data, dict) else 0,
     )
-    return _pack_header(MESSAGE_STATUS, source, PAYLOAD_JSON_UTF8, metadata, 0, len(payload)) + payload
+    return _pack_header(message_type, source, PAYLOAD_JSON_UTF8, metadata, 0, len(payload)) + payload
+
+
+def pack_status(source: str, sequence: int, status: Any) -> bytes:
+    data = asdict(status) if is_dataclass(status) else status
+    return _pack_json_message(MESSAGE_STATUS, source, sequence, data)
+
+
+def pack_ai_detections(source: str, sequence: int, result: Mapping[str, Any]) -> bytes:
+    return _pack_json_message(MESSAGE_AI_DETECTIONS, source, sequence, dict(result))
 
 
 def unpack_header(message: bytes) -> dict[str, int | float | bytes]:

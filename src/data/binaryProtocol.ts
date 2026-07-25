@@ -1,4 +1,4 @@
-import type { AnalyzerRuntimeStatus, AnalyzerSourceType, SpectrumFrame, WaterfallFrame } from '../types'
+import type { AiDetectionResult, AnalyzerRuntimeStatus, AnalyzerSourceType, SpectrumFrame, WaterfallFrame } from '../types'
 
 const MAGIC = 'SAN9'
 const LEGACY_VERSION = 2
@@ -11,6 +11,7 @@ export const TEMPORAL_SPECTRUM_HEADER_SIZE = 128
 export type ParsedAnalyzerMessage =
   | { kind: 'spectrum'; frame: SpectrumFrame }
   | { kind: 'waterfall'; frame: WaterfallFrame }
+  | { kind: 'ai-detections'; result: AiDetectionResult }
   | { kind: 'status'; status: AnalyzerRuntimeStatus }
 
 export const acceptsConfigurationGeneration=(incoming:number,current:number)=>incoming>=current
@@ -19,6 +20,55 @@ function sourceName(code: number): AnalyzerSourceType {
   if (code === 1) return 'simulator'
   if (code === 2) return 'san90'
   throw new Error(`Unknown analyzer source ${code}`)
+}
+
+function parseAiDetectionResult(payload: Uint8Array): AiDetectionResult {
+  const raw = JSON.parse(new TextDecoder().decode(payload)) as unknown
+  if (typeof raw !== 'object' || raw === null) throw new Error('AI detection payload must be an object')
+  const data = raw as Record<string, unknown>
+  if (!Array.isArray(data.detections)) throw new Error('AI detection payload must contain detections')
+  const detections = data.detections.map((item) => {
+    if (typeof item !== 'object' || item === null) throw new Error('AI detection entry must be an object')
+    const detection = item as Record<string, unknown>
+    const label = detection.label
+    const confidence = detection.confidence
+    const frequencyStartHz = detection.frequency_start
+    const frequencyStopHz = detection.frequency_stop
+    if (
+      typeof label !== 'string' ||
+      !label ||
+      typeof confidence !== 'number' ||
+      !Number.isFinite(confidence) ||
+      confidence < 0 ||
+      confidence > 1 ||
+      typeof frequencyStartHz !== 'number' ||
+      !Number.isFinite(frequencyStartHz) ||
+      typeof frequencyStopHz !== 'number' ||
+      !Number.isFinite(frequencyStopHz) ||
+      frequencyStopHz <= frequencyStartHz
+    ) throw new Error('AI detection entry is invalid')
+    return {
+      label,
+      confidence,
+      frequencyStartHz,
+      frequencyStopHz,
+      ...(typeof detection.class_id === 'number' && Number.isInteger(detection.class_id)
+        ? { classId: detection.class_id }
+        : {}),
+    }
+  })
+  const optionalNumber = (name: string) => (
+    typeof data[name] === 'number' && Number.isFinite(data[name])
+      ? data[name] as number
+      : null
+  )
+  return {
+    sequence: optionalNumber('sequence'),
+    timestampNs: optionalNumber('timestamp_ns'),
+    generatedAt: optionalNumber('generated_at'),
+    receivedAtNs: optionalNumber('received_at_ns'),
+    detections,
+  }
 }
 
 export function parseAnalyzerMessage(buffer: ArrayBuffer): ParsedAnalyzerMessage {
@@ -102,6 +152,13 @@ export function parseAnalyzerMessage(buffer: ArrayBuffer): ParsedAnalyzerMessage
   if (messageType === 0x10) {
     if (payloadType !== 3 || pointCount !== 0) throw new Error('Invalid runtime status encoding')
     return { kind: 'status', status: JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, headerSize, payloadLength))) as AnalyzerRuntimeStatus }
+  }
+  if (messageType === 0x11) {
+    if (payloadType !== 3 || pointCount !== 0) throw new Error('Invalid AI detection encoding')
+    return {
+      kind: 'ai-detections',
+      result: parseAiDetectionResult(new Uint8Array(buffer, headerSize, payloadLength)),
+    }
   }
   if (pointCount === 0) throw new Error('Trace point count is zero')
   const sequenceNumber = Number(sequence <= BigInt(Number.MAX_SAFE_INTEGER) ? sequence : 0n)

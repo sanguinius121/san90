@@ -9,6 +9,9 @@ Manual external RF-path control through an Adafruit FT232H is documented in [doc
 ## Run
 
 Requires a current Node.js LTS release.
+For a complete fresh-machine setup, including Python, Node.js, the HAROGIC
+udev/device configuration, and `usbreset`, see
+[docs/dependency-installation.md](docs/dependency-installation.md).
 
 ```bash
 npm install

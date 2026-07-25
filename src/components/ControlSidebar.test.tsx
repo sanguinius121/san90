@@ -94,6 +94,126 @@ afterEach(() => {
 })
 
 describe('ControlSidebar hardware controls', () => {
+  it('commits GHz and MHz as canonical Hz and switches units without configuring hardware', async () => {
+    let current = settings()
+    const frequencyRequests: number[] = []
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/analyzer/capabilities')) return json(capabilities)
+      if (url.endsWith('/api/analyzer/settings')) return json(current)
+      if (url.endsWith('/api/analyzer/frequency') && init?.method === 'PUT') {
+        const request = JSON.parse(String(init.body)) as {center_frequency_hz:number}
+        frequencyRequests.push(request.center_frequency_hz)
+        current = settings(request.center_frequency_hz, current.configuration_generation + 1)
+        return json({ settings: current })
+      }
+      return json({}, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ControlSidebar />)
+
+    const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
+    const unit = await screen.findByLabelText('Center frequency unit') as HTMLSelectElement
+    await waitFor(() => expect(center.value).toBe('2.45'))
+    expect(unit.value).toBe('GHz')
+    expect(Array.from(unit.options, option => option.value)).toEqual(['GHz', 'MHz'])
+
+    fireEvent.focus(center)
+    fireEvent.change(center, { target: { value: '' } })
+    fireEvent.change(center, { target: { value: '2.45' } })
+    fireEvent.keyDown(center, { key: 'Enter' })
+    await waitFor(() => expect(frequencyRequests).toEqual([2_450_000_000]))
+
+    fireEvent.change(unit, { target: { value: 'MHz' } })
+    expect(center.value).toBe('2450')
+    expect(useDeviceStore.getState().centerHz).toBe(2_450_000_000)
+    expect(frequencyRequests).toHaveLength(1)
+
+    fireEvent.focus(center)
+    fireEvent.change(center, { target: { value: '' } })
+    fireEvent.change(center, { target: { value: '2450' } })
+    fireEvent.keyDown(center, { key: 'Enter' })
+    await waitFor(() => expect(frequencyRequests).toEqual([2_450_000_000, 2_450_000_000]))
+
+    fireEvent.change(unit, { target: { value: 'GHz' } })
+    expect(center.value).toBe('2.45')
+    expect(useDeviceStore.getState().centerHz).toBe(2_450_000_000)
+    expect(frequencyRequests).toHaveLength(2)
+  })
+
+  it('keeps an editing draft through polling and formats verified readback in MHz', async () => {
+    let current = settings()
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/analyzer/capabilities')) return json(capabilities)
+      if (url.endsWith('/api/analyzer/settings')) return json(current)
+      if (url.endsWith('/api/analyzer/frequency') && init?.method === 'PUT') {
+        current = settings(2_450_123_456, 2)
+        return json({ settings: current })
+      }
+      return json({}, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ControlSidebar />)
+
+    const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
+    const unit = await screen.findByLabelText('Center frequency unit') as HTMLSelectElement
+    await waitFor(() => expect(center.disabled).toBe(false))
+    fireEvent.change(unit, { target: { value: 'MHz' } })
+    expect(center.value).toBe('2450')
+
+    fireEvent.focus(center)
+    fireEvent.change(center, { target: { value: '2451.25' } })
+    useDeviceStore.setState({ centerHz: 2_460_000_000 })
+    expect(center.value).toBe('2451.25')
+
+    fireEvent.keyDown(center, { key: 'Enter' })
+    await waitFor(() => expect(center.value).toBe('2450.123456'))
+    expect(useDeviceStore.getState().centerHz).toBe(2_450_123_456)
+  })
+
+  it('rejects empty, non-finite, non-positive, and out-of-range values in both units', async () => {
+    const boundedCapabilities = {
+      ...capabilities,
+      center_frequency_min_hz: 1_000_000,
+      center_frequency_max_hz: 9_500_000_000,
+    }
+    const frequencyRequests: number[] = []
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/analyzer/capabilities')) return json(boundedCapabilities)
+      if (url.endsWith('/api/analyzer/settings')) return json(settings())
+      if (url.endsWith('/api/analyzer/frequency') && init?.method === 'PUT') {
+        const request = JSON.parse(String(init.body)) as {center_frequency_hz:number}
+        frequencyRequests.push(request.center_frequency_hz)
+        return json(settings(request.center_frequency_hz))
+      }
+      return json({}, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ControlSidebar />)
+
+    const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
+    const unit = await screen.findByLabelText('Center frequency unit') as HTMLSelectElement
+    await waitFor(() => expect(center.disabled).toBe(false))
+
+    for (const invalid of ['', 'NaN', 'Infinity', '0', '-2', '10']) {
+      fireEvent.focus(center)
+      fireEvent.change(center, { target: { value: invalid } })
+      fireEvent.keyDown(center, { key: 'Enter' })
+    }
+    fireEvent.change(unit, { target: { value: 'MHz' } })
+    for (const invalid of ['0', '-1', '0.5', '9501']) {
+      fireEvent.focus(center)
+      fireEvent.change(center, { target: { value: invalid } })
+      fireEvent.keyDown(center, { key: 'Enter' })
+    }
+
+    expect(frequencyRequests).toHaveLength(0)
+    expect((await screen.findByRole('alert')).textContent).toContain('Center frequency must be between')
+    expect(useDeviceStore.getState().centerHz).toBe(2_450_000_000)
+  })
+
   it('preserves an amplitude-offset draft during polling and commits one verified value', async () => {
     let current = settings()
     const offsetRequests: number[] = []
