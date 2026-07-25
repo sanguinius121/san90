@@ -146,7 +146,7 @@ while still max-holding every native trace. See
   changing the canonical Hz value or reconfiguring hardware. Validation and
   the backend request remain in Hz.
 - The collapsible Frequency Scan control keeps independent entry drafts,
-  initializes 400 MHz, 900 MHz, 2.44 GHz, 3.3 GHz, 5 GHz, and 5.75 GHz with
+  initializes 400 MHz, 900 MHz, 2.44 GHz, 3.3 GHz, 5 GHz, and 5775 MHz with
   five-second dwell times,
   supports GHz/MHz display units, and disables manual center-frequency commits
   while the backend scan controller owns tuning.

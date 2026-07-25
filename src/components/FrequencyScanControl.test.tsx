@@ -75,7 +75,7 @@ describe('FrequencyScanControl',()=>{
       {frequency:'2.44',unit:'GHz',duration:'5'},
       {frequency:'3.3',unit:'GHz',duration:'5'},
       {frequency:'5',unit:'GHz',duration:'5'},
-      {frequency:'5.75',unit:'GHz',duration:'5'},
+      {frequency:'5775',unit:'MHz',duration:'5'},
     ])
   })
 

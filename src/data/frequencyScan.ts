@@ -16,7 +16,7 @@ export const DEFAULT_FREQUENCY_SCAN_ENTRIES = [
   {frequencyHz:2.44e9,frequencyUnit:'GHz'},
   {frequencyHz:3.3e9,frequencyUnit:'GHz'},
   {frequencyHz:5e9,frequencyUnit:'GHz'},
-  {frequencyHz:5.75e9,frequencyUnit:'GHz'},
+  {frequencyHz:5.775e9,frequencyUnit:'MHz'},
 ] as const satisfies ReadonlyArray<{
   frequencyHz:number
   frequencyUnit:CenterFrequencyUnit

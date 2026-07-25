@@ -46,7 +46,7 @@ owns tuning. Stop leaves the analyzer at the most recently verified scan
 frequency.
 
 The initial UI list contains six enabled entries, each with a 5.0-second dwell:
-400 MHz, 900 MHz, 2.44 GHz, 3.3 GHz, 5 GHz, and 5.75 GHz. Newly added entries
+400 MHz, 900 MHz, 2.44 GHz, 3.3 GHz, 5 GHz, and 5775 MHz. Newly added entries
 also default to a 5.0-second dwell. The minimum and UI step are both 0.5
 seconds.
 Loss of analyzer availability or a failed/mismatched tune ends the scan in the
