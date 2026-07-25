@@ -40,6 +40,7 @@ export class SpectrumRenderer {
   private buffer: WebGLBuffer;
   private current: Float32Array | null = null;
   private intervalMax: Float32Array | null = null;
+  private configurationGeneration: number | null = null;
   constructor(private canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", { antialias: true, alpha: true });
     if (!gl) throw new Error("WebGL2 is required for the spectrum");
@@ -64,9 +65,20 @@ export class SpectrumRenderer {
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, 1, gl.FLOAT, false, 0, 0);
   }
-  setFrame(values: Float32Array, intervalMaximum: Float32Array = values) {
+  setFrame(
+    values: Float32Array,
+    intervalMaximum: Float32Array = values,
+    configurationGeneration?:number,
+  ) {
     if (values.length !== intervalMaximum.length)
       throw new Error("Temporal spectrum arrays must have matching lengths");
+    if(
+      configurationGeneration!==undefined&&
+      configurationGeneration!==this.configurationGeneration
+    ){
+      if(this.configurationGeneration!==null)this.intervalMax=null
+      this.configurationGeneration=configurationGeneration
+    }
     this.current = values;
     this.intervalMax = accumulateSpectrumIntervalMax(
       this.intervalMax,

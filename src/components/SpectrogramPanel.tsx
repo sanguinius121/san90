@@ -16,16 +16,29 @@ import {
   FIXED_RENDER_PERIOD_MS,
   fixedRenderDecision,
 } from "../rendering/renderSchedule";
-import { sharedHorizontalPlotRect } from "../rendering/plotGeometry";
+import {
+  sharedHorizontalPlotRect,
+  visibleFrequencyPlotRange,
+  type FrequencyPlotRange,
+} from "../rendering/plotGeometry";
+
+const centerFrequencyRange=(centerHz:number,spanHz:number):FrequencyPlotRange=>({
+  startHz:centerHz-spanHz/2,
+  stopHz:centerHz+spanHz/2,
+})
 
 export function SpectrogramPanel() {
   const glRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const overlayDirty=useRef(true)
   const [error, setError] = useState<string>();
   const center = useDeviceStore((s) => s.centerHz);
   const span = useDeviceStore((s) => s.spanHz);
-  const generation = useRuntimeStore((s) => s.configurationGeneration);
-  const pointCount = useRuntimeStore((s) => s.pointCount);
+  const frequencyRange=useRef(centerFrequencyRange(center,span))
+  useEffect(()=>{
+    frequencyRange.current=centerFrequencyRange(center,span)
+    overlayDirty.current=true
+  },[center,span])
   useEffect(() => {
     const canvas = glRef.current;
     const overlay = overlayRef.current;
@@ -40,7 +53,6 @@ export function SpectrogramPanel() {
     }
     let raf = 0;
     let dirty = true;
-    let overlayDirty = true;
     let uploadedRows = 0;
     let uploadedAt = performance.now();
     let rendered = 0;
@@ -65,6 +77,8 @@ export function SpectrogramPanel() {
     const pending = new BoundedWaterfallBatchBuffer();
     const unsubscribe = liveFrames.subscribeWaterfall((frame) => {
       pending.push(frame);
+      frequencyRange.current={startHz:frame.startHz,stopHz:frame.stopHz}
+      overlayDirty.current=true
       dirty = true;
     });
     const drawOverlay = () => {
@@ -87,11 +101,12 @@ export function SpectrogramPanel() {
         ctx.stroke();
       }
       const view = useDisplayStore.getState().viewport;
+      const visible=visibleFrequencyPlotRange(frequencyRange.current,view)
       FrequencyAxis(
         ctx,
         area,
-        center - span / 2 + span * view.start,
-        center - span / 2 + span * view.end,
+        visible.startHz,
+        visible.stopHz,
       );
       const visibleSeconds = useRuntimeStore.getState().visibleTimeSpanSeconds;
       ctx.fillStyle = "#91a4b3";
@@ -108,32 +123,41 @@ export function SpectrogramPanel() {
     let nextRenderDeadline = 0;
     const animate = (now: number) => {
       const runtime = useRuntimeStore.getState();
+      const hasHistory=renderer.validRowCount>0
       const decision =
         pending.size > 0
           ? { due: true, nextDeadline: now + FIXED_RENDER_PERIOD_MS }
-          : dirty
+          : hasHistory || dirty || overlayDirty.current
             ? fixedRenderDecision(now, nextRenderDeadline)
             : { due: false, nextDeadline: nextRenderDeadline };
       nextRenderDeadline = decision.nextDeadline;
-      if (dirty && decision.due) {
+      if (decision.due) {
         const uploadStarted = performance.now();
         for (const frame of pending.drain()) {
-          renderer.addRows(frame.values, frame.rowCount, frame.pointCount,frame.firstRowSequence);
+          renderer.addRows(
+            frame.values,
+            frame.rowCount,
+            frame.pointCount,
+            frame.firstRowSequence,
+            frame.configurationGeneration,
+          );
           uploadedRows += frame.rowCount;
         }
         uploadTimeMs += performance.now() - uploadStarted;
-        resizeCanvas(canvas);
-        const visible = waterfallVisibleRows(
-          runtime.waterfallRowsPerSecond,
-          runtime.visibleTimeSpanSeconds,
-        );
-        const renderStarted = performance.now();
-        renderer.render(useDisplayStore.getState().viewport, visible);
-        renderTimeMs += performance.now() - renderStarted;
-        rendered++;
-        if (overlayDirty) {
+        if(renderer.validRowCount>0){
+          resizeCanvas(canvas);
+          const visible = waterfallVisibleRows(
+            runtime.waterfallRowsPerSecond,
+            runtime.visibleTimeSpanSeconds,
+          );
+          const renderStarted = performance.now();
+          renderer.render(useDisplayStore.getState().viewport, visible);
+          renderTimeMs += performance.now() - renderStarted;
+          rendered++;
+        }
+        if (overlayDirty.current) {
           drawOverlay();
-          overlayDirty = false;
+          overlayDirty.current = false;
         }
         dirty = false;
       }
@@ -173,12 +197,12 @@ export function SpectrogramPanel() {
     raf = requestAnimationFrame(animate);
     const observer = new ResizeObserver(() => {
       dirty = true;
-      overlayDirty = true;
+      overlayDirty.current = true;
     });
     observer.observe(canvas);
     const unsubStore = useDisplayStore.subscribe(() => {
       dirty = true;
-      overlayDirty = true;
+      overlayDirty.current = true;
     });
     return () => {
       unsubscribe();
@@ -188,7 +212,7 @@ export function SpectrogramPanel() {
       observer.disconnect();
       renderer.dispose();
     };
-  }, [center, span, generation, pointCount]);
+  }, []);
   return (
     <section className="plot-panel spectrogram-panel">
       <header className="plot-header">

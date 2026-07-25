@@ -8,6 +8,30 @@ export interface CircularRowUpload {
   targetRow: number;
   rowCount: number;
 }
+
+export interface SpectrogramStateTransition {
+  generationChanged:boolean
+  pointCountChanged:boolean
+  resetHistory:boolean
+  reallocateTexture:boolean
+}
+
+export function spectrogramStateTransition(
+  currentGeneration:number|null,
+  currentPointCount:number,
+  incomingGeneration:number|undefined,
+  incomingPointCount:number,
+):SpectrogramStateTransition {
+  const generationChanged=
+    incomingGeneration!==undefined&&incomingGeneration!==currentGeneration
+  const pointCountChanged=incomingPointCount!==currentPointCount
+  return {
+    generationChanged,
+    pointCountChanged,
+    resetHistory:generationChanged&&currentGeneration!==null&&!pointCountChanged,
+    reallocateTexture:pointCountChanged,
+  }
+}
 export function planCircularRowUploads(
   writeRow: number,
   rowCount: number,
@@ -215,6 +239,7 @@ export class SpectrogramRenderer {
   private rows: number;
   private points = 1024;
   private cursor: CircularWaterfallCursor;
+  private configurationGeneration:number|null=null;
   constructor(
     private canvas: HTMLCanvasElement,
     textureRows = 4096,
@@ -299,7 +324,13 @@ export class SpectrogramRenderer {
   addRow(row: Uint8Array) {
     this.addRows(row, 1, row.length);
   }
-  addRows(values: Uint8Array, rowCount: number, pointCount: number, firstRowSequence=0) {
+  addRows(
+    values:Uint8Array,
+    rowCount:number,
+    pointCount:number,
+    firstRowSequence=0,
+    configurationGeneration?:number,
+  ) {
     const gl = this.gl;
     if (
       rowCount <= 0 ||
@@ -309,7 +340,17 @@ export class SpectrogramRenderer {
       throw new Error("Waterfall batch dimensions do not match payload");
     if (rowCount > this.rows)
       throw new Error("Waterfall batch exceeds texture history depth");
-    if (pointCount !== this.points) {
+    const transition=spectrogramStateTransition(
+      this.configurationGeneration,
+      this.points,
+      configurationGeneration,
+      pointCount,
+    )
+    if(transition.generationChanged&&configurationGeneration!==undefined){
+      if(transition.resetHistory)this.cursor.reset()
+      this.configurationGeneration=configurationGeneration
+    }
+    if (transition.reallocateTexture) {
       this.points = pointCount;
       this.cursor.reset();
       gl.bindTexture(gl.TEXTURE_2D, this.dataTexture);
@@ -347,6 +388,9 @@ export class SpectrogramRenderer {
   }
   get textureRowCount() {
     return this.rows;
+  }
+  get pointCount(){
+    return this.points
   }
   get wrapCount() {
     return this.cursor.wraps;

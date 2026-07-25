@@ -19,22 +19,36 @@ import {
   fixedRenderDecision,
 } from "../rendering/renderSchedule";
 import { spectrumBinFrequencyHz } from "../data/frequencyBins";
-import { plotXToNormalizedFrequency,sharedHorizontalPlotRect } from "../rendering/plotGeometry";
+import {
+  plotXToNormalizedFrequency,
+  sharedHorizontalPlotRect,
+  visibleFrequencyPlotRange,
+  type FrequencyPlotRange,
+} from "../rendering/plotGeometry";
 import { IfOverflowWarning } from "./IfOverflowWarning";
+
+const centerFrequencyRange=(centerHz:number,spanHz:number):FrequencyPlotRange=>({
+  startHz:centerHz-spanHz/2,
+  stopHz:centerHz+spanHz/2,
+})
 
 export function SpectrumPanel() {
   const glRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const latest = useRef<SpectrumFrame | null>(null);
   const overlayDirty = useRef(true);
+  const initialDevice=useDeviceStore.getState()
+  const frequencyRange=useRef(centerFrequencyRange(initialDevice.centerHz,initialDevice.spanHz));
   const drag = useRef<{ x: number; start: number; end: number } | null>(null);
   const cross = useRef<{ x: number; y: number } | null>(null);
   const [error, setError] = useState<string>();
   const center = useDeviceStore((s) => s.centerHz);
   const span = useDeviceStore((s) => s.spanHz);
   const referenceLevelDbm = useDeviceStore((s) => s.referenceDbm);
-  const generation = useRuntimeStore((s) => s.configurationGeneration);
-  const pointCount = useRuntimeStore((s) => s.pointCount);
+  useEffect(()=>{
+    frequencyRange.current=centerFrequencyRange(center,span)
+    overlayDirty.current=true
+  },[center,span])
   useEffect(() => {
     useDisplayStore.getState().setSpectrumReferenceLevel(referenceLevelDbm);
   }, [referenceLevelDbm]);
@@ -63,7 +77,13 @@ export function SpectrumPanel() {
     let pendingMerges = 0;
     const unsubscribe = liveFrames.subscribe((frame) => {
       latest.current = frame;
-      renderer.setFrame(frame.values, frame.intervalMaxValues ?? frame.values);
+      frequencyRange.current={startHz:frame.startHz,stopHz:frame.stopHz}
+      overlayDirty.current=true
+      renderer.setFrame(
+        frame.values,
+        frame.intervalMaxValues??frame.values,
+        frame.configurationGeneration,
+      );
       dirty = true;
       pendingFrames++;
     });
@@ -79,9 +99,8 @@ export function SpectrumPanel() {
       const horizontal=sharedHorizontalPlotRect(w)
       const area = { ...horizontal, top: 7, bottom: h - 27 };
       const view = useDisplayStore.getState().viewport;
-      const visibleStart = center - span / 2 + span * view.start;
-      const visibleStop = center - span / 2 + span * view.end;
-      FrequencyAxis(ctx, area, visibleStart, visibleStop);
+      const visible=visibleFrequencyPlotRange(frequencyRange.current,view)
+      FrequencyAxis(ctx, area, visible.startHz, visible.stopHz);
       AmplitudeAxis(ctx, area, view.minDbm, view.maxDbm);
       MarkerOverlay(
         ctx,
@@ -89,8 +108,8 @@ export function SpectrumPanel() {
         useDisplayStore.getState().marker,
         view.minDbm,
         view.maxDbm,
-        visibleStart,
-        visibleStop,
+        visible.startHz,
+        visible.stopHz,
       );
       if (cross.current) {
         ctx.strokeStyle = "rgba(115,215,239,.45)";
@@ -107,14 +126,15 @@ export function SpectrumPanel() {
     const animate = (now: number) => {
       const display = useDisplayStore.getState();
       const runtime = useRuntimeStore.getState();
+      const hasFrame=latest.current!==null
       const decision =
         pendingFrames > 0
           ? { due: true, nextDeadline: now + FIXED_RENDER_PERIOD_MS }
-          : dirty || overlayDirty.current
+          : hasFrame || dirty || overlayDirty.current
             ? fixedRenderDecision(now, nextRenderDeadline)
             : { due: false, nextDeadline: nextRenderDeadline };
       nextRenderDeadline = decision.nextDeadline;
-      if (dirty && decision.due) {
+      if (hasFrame && decision.due) {
         const renderStarted = performance.now();
         resizeCanvas(canvas);
         renderer.render(display.viewport, display.persistence);
@@ -162,7 +182,7 @@ export function SpectrumPanel() {
       observer.disconnect();
       renderer.dispose();
     };
-  }, [center, span, generation, pointCount]);
+  }, []);
   const pointerPosition = (event: PointerEvent | WheelEvent) => {
     const rect = event.currentTarget.getBoundingClientRect();
     return {

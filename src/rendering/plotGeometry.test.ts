@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest'
-import {frequencyToPlotX,plotRectFramebuffer,plotXToNormalizedFrequency,sharedHorizontalPlotRect} from './plotGeometry'
+import {frequencyToPlotX,plotRectFramebuffer,plotXToNormalizedFrequency,sharedHorizontalPlotRect,visibleFrequencyPlotRange} from './plotGeometry'
 
 describe('shared horizontal plot rectangle',()=>{
   it('maps start, center, and stop identically for both panels',()=>{
@@ -24,5 +24,16 @@ describe('shared horizontal plot rectangle',()=>{
     const gridX=rect.left+rect.width*.75
     expect(markerX).toBeCloseTo(gridX)
     expect(plotXToNormalizedFrequency(markerX,rect)).toBeCloseTo(.75)
+  })
+  it('updates the visible axis range from verified tune readback without changing plot geometry',()=>{
+    const view={start:.25,end:.75}
+    expect(visibleFrequencyPlotRange({startHz:2.4e9,stopHz:2.5e9},view)).toEqual({
+      startHz:2.425e9,
+      stopHz:2.475e9,
+    })
+    expect(visibleFrequencyPlotRange({startHz:5.7e9,stopHz:5.8e9},view)).toEqual({
+      startHz:5.725e9,
+      stopHz:5.775e9,
+    })
   })
 })

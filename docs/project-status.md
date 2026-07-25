@@ -150,6 +150,12 @@ while still max-holding every native trace. See
   five-second dwell times,
   supports GHz/MHz display units, and disables manual center-frequency commits
   while the backend scan controller owns tuning.
+- Spectrum and spectrogram WebGL resources remain mounted across scan
+  center-frequency and configuration-generation changes. Verified frame
+  bounds update the shared frequency axes in place, and spectrogram generation
+  changes reset logical history without reallocating its texture. A
+  21-transition SAN-90 run observed zero post-warm-up WebGL resource or texture
+  allocations; the hardware publication gap remained approximately 131 ms.
 - Reference-level `+` and `-` use a 10 dB step.
 - The verified actual reference level drives the spectrum Y-axis maximum.
 - Spectrum dynamic range is retained at 100 dB; current and temporal/max traces

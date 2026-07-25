@@ -1,5 +1,5 @@
 import { describe,expect,it } from 'vitest'
-import { BoundedWaterfallBatchBuffer,CircularWaterfallCursor,chronologicalTextureRow,debugWaterfallRows,planCircularRowUploads,sourceAgeRangeForOutputRow,verticalMaxPoolCircularRows,verticalMaxPoolRows,visibleTextureRow,waterfallHistorySeconds,waterfallVisibleRows } from './SpectrogramRenderer'
+import { BoundedWaterfallBatchBuffer,CircularWaterfallCursor,chronologicalTextureRow,debugWaterfallRows,planCircularRowUploads,sourceAgeRangeForOutputRow,spectrogramStateTransition,verticalMaxPoolCircularRows,verticalMaxPoolRows,visibleTextureRow,waterfallHistorySeconds,waterfallVisibleRows } from './SpectrogramRenderer'
 
 describe('batched waterfall texture planning',()=>{
   it('uses one partial upload when a batch does not wrap',()=>{
@@ -56,6 +56,28 @@ describe('batched waterfall texture planning',()=>{
     cursor.commit(4);expect([cursor.writeRow,cursor.validRows,cursor.wraps]).toEqual([4,4,0])
     cursor.commit(12);expect([cursor.writeRow,cursor.validRows,cursor.wraps]).toEqual([0,16,1])
     cursor.reset();expect([cursor.writeRow,cursor.validRows,cursor.wraps]).toEqual([0,0,0])
+  })
+  it('resets history once per new generation without reallocating an unchanged texture',()=>{
+    expect(spectrogramStateTransition(7,3328,8,3328)).toEqual({
+      generationChanged:true,
+      pointCountChanged:false,
+      resetHistory:true,
+      reallocateTexture:false,
+    })
+    expect(spectrogramStateTransition(8,3328,8,3328)).toEqual({
+      generationChanged:false,
+      pointCountChanged:false,
+      resetHistory:false,
+      reallocateTexture:false,
+    })
+  })
+  it('reallocates only for a genuine point-count change and avoids a duplicate history reset',()=>{
+    expect(spectrogramStateTransition(8,3328,9,1664)).toEqual({
+      generationChanged:true,
+      pointCountChanged:true,
+      resetHistory:false,
+      reallocateTexture:true,
+    })
   })
   it('commits multiple queued wrap batches without duplicated texture targets',()=>{
     const cursor=new CircularWaterfallCursor(16);cursor.commit(12)

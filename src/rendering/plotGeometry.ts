@@ -7,6 +7,30 @@ export interface HorizontalPlotRect {
   width: number
 }
 
+export interface FrequencyPlotRange {
+  startHz:number
+  stopHz:number
+}
+
+export function visibleFrequencyPlotRange(
+  range:FrequencyPlotRange,
+  view:{start:number;end:number},
+):FrequencyPlotRange {
+  const span=range.stopHz-range.startHz
+  if(
+    !Number.isFinite(range.startHz)||
+    !Number.isFinite(range.stopHz)||
+    span<=0||
+    !Number.isFinite(view.start)||
+    !Number.isFinite(view.end)||
+    view.end<=view.start
+  )throw new Error('Visible frequency range is invalid')
+  return {
+    startHz:range.startHz+span*view.start,
+    stopHz:range.startHz+span*view.end,
+  }
+}
+
 export function sharedHorizontalPlotRect(canvasCssWidth: number): HorizontalPlotRect {
   if (!Number.isFinite(canvasCssWidth) || canvasCssWidth <= 0) throw new Error('Canvas CSS width must be positive')
   const left = Math.min(SHARED_PLOT_LEFT_CSS_PX, Math.max(0, canvasCssWidth - 1))
