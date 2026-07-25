@@ -43,6 +43,26 @@ export interface AnalyzerSettingsApi {
   configuration_generation:number
 }
 
+export interface FrequencyScanEntryApi {
+  id:string
+  enabled:boolean
+  center_frequency_hz:number
+  duration_seconds:number
+}
+
+export interface FrequencyScanApi {
+  entries:FrequencyScanEntryApi[]
+  running:boolean
+  state:'idle'|'tuning'|'dwelling'|'stopping'|'error'
+  active_entry_id:string|null
+  active_index:number|null
+  active_count:number
+  verified_center_frequency_hz:number|null
+  dwell_duration_seconds:number|null
+  remaining_dwell_seconds:number|null
+  last_error:string|null
+}
+
 export type RfPathId = 'rf1'|'rf2'|'rf3'|'rf4'|'rf5'|'rf6'|'rf7'|'rf8'
 export interface RfSwitchPathApi {id:RfPathId;rf_channel:string;address:number;label:string;external_lna:boolean}
 export interface RfSwitchCapabilitiesApi {enabled:boolean;default_path:RfPathId;selection_policy:string;paths:RfSwitchPathApi[]}
@@ -68,6 +88,11 @@ export const analyzerApi={
   capabilities:()=>request<AnalyzerCapabilitiesApi>('/api/analyzer/capabilities'),
   settings:()=>request<AnalyzerSettingsApi>('/api/analyzer/settings'),
   put:<T>(path:string,body:object)=>request<T>(path,{method:'PUT',body:JSON.stringify(body)}),
+  post:<T>(path:string,body?:object)=>request<T>(path,{method:'POST',...(body?{body:JSON.stringify(body)}:{})}),
+  frequencyScanStatus:()=>request<FrequencyScanApi>('/api/analyzer/frequency-scan/status'),
+  configureFrequencyScan:(entries:FrequencyScanEntryApi[])=>request<FrequencyScanApi>('/api/analyzer/frequency-scan/config',{method:'PUT',body:JSON.stringify({entries})}),
+  startFrequencyScan:()=>request<FrequencyScanApi>('/api/analyzer/frequency-scan/start',{method:'POST'}),
+  stopFrequencyScan:()=>request<FrequencyScanApi>('/api/analyzer/frequency-scan/stop',{method:'POST'}),
 }
 export const rfSwitchApi={
   capabilities:()=>request<RfSwitchCapabilitiesApi>('/api/rf-switch/capabilities'),

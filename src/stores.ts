@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AnalyzerSourceType, ConnectionState, Marker, ToolMode, Viewport } from './types'
+import type { AnalyzerSourceType, ConnectionState, FrequencyScanStatus, Marker, ToolMode, Viewport } from './types'
 import type { RfSwitchStatusApi } from './data/controlApi'
 import { DEFAULT_SPECTRUM_DYNAMIC_RANGE_DB, spectrumRangeForReferenceLevel } from './rendering/amplitudeScale'
 
@@ -56,7 +56,7 @@ interface RuntimeState {
   pointCount: number; droppedFrames: number; replacedSnapshots: number; actualRbwHz: number; actualSpanHz: number
   fftSize:number|null;frequencyBinSpacingHz:number|null;tracesPerSpectrumFrame:number|null;tracesPerWaterfallRow:number|null
   waterfallFloorDbm: number; waterfallCeilingDbm: number
-  configurationGeneration:number; reconfiguring:boolean
+  configurationGeneration:number; reconfiguring:boolean; frequencyScan:FrequencyScanStatus
   ifOverflow:boolean
   sweepTimeMs: number; websocketBytes: number; acquisitionErrors: number; lastError?: string
   update: (values: Partial<Omit<RuntimeState, 'update'>>) => void
@@ -70,6 +70,7 @@ export const useRuntimeStore = create<RuntimeState>((set) => ({
   fftSize:null,frequencyBinSpacingHz:null,tracesPerSpectrumFrame:null,tracesPerWaterfallRow:null,
   waterfallFloorDbm:-112, waterfallCeilingDbm:-10,
   configurationGeneration:0, reconfiguring:false,
+  frequencyScan:{running:false,state:'idle',active_entry_id:null,active_index:null,active_count:0,verified_center_frequency_hz:null,dwell_duration_seconds:null,remaining_dwell_seconds:null,last_error:null},
   ifOverflow:false,
   sweepTimeMs: 40, websocketBytes: 0, acquisitionErrors: 0,
   update: (values) => set(values),

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ControlSidebar } from './ControlSidebar'
 import { useDeviceStore, useRuntimeStore } from '../stores'
@@ -84,7 +84,13 @@ function json(body: unknown, status = 200) {
 }
 
 beforeEach(() => {
-  useRuntimeStore.setState({ source: 'san90', reconfiguring: false, lastError: undefined, configurationGeneration: 0 })
+  useRuntimeStore.setState({
+    source: 'san90',
+    reconfiguring: false,
+    lastError: undefined,
+    configurationGeneration: 0,
+    frequencyScan:{running:false,state:'idle',active_entry_id:null,active_index:null,active_count:0,verified_center_frequency_hz:null,dwell_duration_seconds:null,remaining_dwell_seconds:null,last_error:null},
+  })
   useDeviceStore.setState({ centerHz: 2.45e9, stepHz: 10e6 })
 })
 
@@ -94,6 +100,24 @@ afterEach(() => {
 })
 
 describe('ControlSidebar hardware controls', () => {
+  it('disables manual center frequency while backend scan status is running and restores it after stop', async () => {
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/api/analyzer/capabilities')) return json(capabilities)
+      if (url.endsWith('/api/analyzer/settings')) return json(settings())
+      return json({}, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ControlSidebar />)
+    const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
+    await waitFor(() => expect(center.disabled).toBe(false))
+
+    act(()=>useRuntimeStore.setState({frequencyScan:{running:true,state:'dwelling',active_entry_id:'a',active_index:1,active_count:1,verified_center_frequency_hz:2.45e9,dwell_duration_seconds:2,remaining_dwell_seconds:1,last_error:null}}))
+    await waitFor(()=>expect(center.disabled).toBe(true))
+    act(()=>useRuntimeStore.setState({frequencyScan:{running:false,state:'idle',active_entry_id:null,active_index:null,active_count:1,verified_center_frequency_hz:2.45e9,dwell_duration_seconds:null,remaining_dwell_seconds:null,last_error:null}}))
+    await waitFor(()=>expect(center.disabled).toBe(false))
+  })
+
   it('commits GHz and MHz as canonical Hz and switches units without configuring hardware', async () => {
     let current = settings()
     const frequencyRequests: number[] = []

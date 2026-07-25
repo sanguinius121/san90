@@ -55,6 +55,8 @@ The following major features are implemented:
 - Bounded 640×640 GRAY8 ZeroMQ image output for an external AI service.
 - A bounded port-5558 AI-result subscriber and compact, frequency-aligned
   current-detection strip between the spectrogram and spectrum.
+- A backend-owned Phase 1 frequency scan loops enabled center-frequency
+  entries in order with verified-readback dwell timing and realtime status.
 - Managed frontend/backend start and stop, including guarded SAN-90 USB reset
   for handoff to SAStudio.
 
@@ -143,6 +145,11 @@ while still max-holding every native trace. See
 - Its display unit defaults to GHz and can switch between GHz and MHz without
   changing the canonical Hz value or reconfiguring hardware. Validation and
   the backend request remain in Hz.
+- The collapsible Frequency Scan control keeps independent entry drafts,
+  initializes 400 MHz, 900 MHz, 2.44 GHz, 3.3 GHz, 5 GHz, and 5.75 GHz with
+  five-second dwell times,
+  supports GHz/MHz display units, and disables manual center-frequency commits
+  while the backend scan controller owns tuning.
 - Reference-level `+` and `-` use a 10 dB step.
 - The verified actual reference level drives the spectrum Y-axis maximum.
 - Spectrum dynamic range is retained at 100 dB; current and temporal/max traces
@@ -498,6 +505,7 @@ These observations are transient and should be re-queried.
 - `docs/san90-resolution-tradeoff-table.md` — measured eight-profile table.
 - `docs/san90-resolution-tradeoff-report.md` — trade-off implementation report.
 - `docs/realtime-binary-protocol.md` — browser streaming protocol.
+- `docs/frequency-scan.md` — Phase 1 sequential scan API and scheduler behavior.
 - `docs/spectrogram-continuity-alignment-report.md` — waterfall seam and axis
   alignment work.
 - `docs/san90-raw-amplitude-format.md` — raw-code-to-dBm behavior.

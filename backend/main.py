@@ -20,6 +20,7 @@ from backend.analyzer.amplitude_correction import validate_amplitude_offset
 from backend.analyzer.errors import ControlError, ControlErrorCode
 from backend.hardware.rf_switch import RfSwitchManager
 from backend.hardware.rf_switch.errors import RfSwitchError
+from backend.frequency_scan import FrequencyScanEntry, MIN_SCAN_DWELL_SECONDS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 service = AnalyzerService()
@@ -58,6 +59,31 @@ class FrequencyRequest(BaseModel):
         if not math.isfinite(value) or value <= 0:
             raise ValueError("center_frequency_hz must be finite and positive")
         return value
+
+
+class FrequencyScanEntryRequest(BaseModel):
+    id: str
+    enabled: bool
+    center_frequency_hz: float
+    duration_seconds: float
+
+    @field_validator("center_frequency_hz")
+    @classmethod
+    def valid_scan_center(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("center_frequency_hz must be finite and positive")
+        return value
+
+    @field_validator("duration_seconds")
+    @classmethod
+    def valid_scan_duration(cls, value: float) -> float:
+        if not math.isfinite(value) or value < MIN_SCAN_DWELL_SECONDS:
+            raise ValueError(f"duration_seconds must be at least {MIN_SCAN_DWELL_SECONDS}")
+        return value
+
+
+class FrequencyScanConfigRequest(BaseModel):
+    entries: list[FrequencyScanEntryRequest]
 
 
 class ReferenceLevelRequest(BaseModel):
@@ -235,6 +261,34 @@ async def frequency(request: FrequencyRequest) -> dict[str, object]:
         "configuration_generation": state["configuration_generation"],
         "settings": state,
     }
+
+
+@app.get("/api/analyzer/frequency-scan/status")
+async def frequency_scan_status() -> dict[str, object]:
+    return service.frequency_scan_payload()
+
+
+@app.put("/api/analyzer/frequency-scan/config")
+async def frequency_scan_config(request: FrequencyScanConfigRequest) -> dict[str, object]:
+    return service.configure_frequency_scan([
+        FrequencyScanEntry(
+            id=entry.id,
+            enabled=entry.enabled,
+            center_frequency_hz=entry.center_frequency_hz,
+            duration_seconds=entry.duration_seconds,
+        )
+        for entry in request.entries
+    ])
+
+
+@app.post("/api/analyzer/frequency-scan/start")
+async def frequency_scan_start() -> dict[str, object]:
+    return await service.start_frequency_scan()
+
+
+@app.post("/api/analyzer/frequency-scan/stop")
+async def frequency_scan_stop() -> dict[str, object]:
+    return await service.stop_frequency_scan()
 
 
 @app.put("/api/analyzer/amplitude/reference-level")

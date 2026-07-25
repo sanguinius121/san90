@@ -180,6 +180,9 @@ export class WebSocketSpectrumSource {
             ifOverflow: status.if_overflow,
             lastError: status.last_error ?? undefined,
             reconfiguring: status.reconfiguring,
+            frequencyScan:
+              status.frequency_scan ??
+              useRuntimeStore.getState().frequencyScan,
             configurationGeneration: Math.max(
               status.configuration_generation,
               useRuntimeStore.getState().configurationGeneration,

@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import resource
+import sys
 import time
 from dataclasses import asdict
 from dataclasses import replace
@@ -33,6 +34,7 @@ from backend.analyzer.tradeoff import (
     visible_rows,
 )
 from backend.ai_detection import AiDetectionSubscriber
+from backend.frequency_scan import FrequencyScanController, FrequencyScanEntry
 
 from .protocol import MESSAGE_AI_DETECTIONS, MESSAGE_SPECTRUM, MESSAGE_SPECTRUM_TEMPORAL, MESSAGE_STATUS, MESSAGE_WATERFALL, pack_ai_detections, pack_spectrum, pack_spectrum_temporal, pack_status, pack_waterfall, pack_waterfall_batch
 
@@ -135,6 +137,11 @@ class AnalyzerService:
         self._last_log_waterfall_batches = 0
         self._last_process_cpu = time.process_time()
         self._control_lock = asyncio.Lock()
+        self.frequency_scan = FrequencyScanController(
+            self._apply_frequency_scan_tune,
+            self._frequency_scan_available,
+            self._publish_status,
+        )
 
     async def start(self) -> None:
         if self.running:
@@ -169,6 +176,8 @@ class AnalyzerService:
             )
 
     async def stop(self, *, disconnect: bool = False) -> None:
+        if self.frequency_scan.running:
+            await self.frequency_scan.stop(reason="Analyzer stopped during frequency scan")
         self.running = False
         ai_task = self._ai_detection_task
         self._ai_detection_task = None
@@ -221,6 +230,10 @@ class AnalyzerService:
             MESSAGE_AI_DETECTIONS,
             pack_ai_detections(self.source_name, self._ai_detection_sequence, result),
         )
+
+    def _publish_status(self) -> None:
+        self._status_sequence += 1
+        self.offer(MESSAGE_STATUS, pack_status(self.source_name, self._status_sequence, self.status_payload()))
 
     def mark_sent(self, message: bytes) -> None:
         size = len(message)
@@ -303,6 +316,7 @@ class AnalyzerService:
             "ai_stream": self.ai_stream_status(),
             "waterfall_producer": self._waterfall_metrics_payload(),
             "spectrum_temporal": self.source.get_spectrum_temporal_metrics() if isinstance(self.source, (San90Source, SimulatorSource)) else None,
+            "frequency_scan": self.frequency_scan.status_payload(),
         }
 
     def ai_stream_status(self) -> dict[str, object]:
@@ -357,9 +371,59 @@ class AnalyzerService:
             raise ControlError(ControlErrorCode.DEVICE_NOT_CONNECTED, "Analyzer source is not initialized", recoverable=True)
         return asdict(self.source.get_settings_state())
 
-    async def apply_control(self, **changes: object) -> dict[str, Any]:
+    def _frequency_scan_limits(self) -> tuple[float, float]:
         if self.source is None:
             raise ControlError(ControlErrorCode.DEVICE_NOT_CONNECTED, "Analyzer source is not initialized", recoverable=True)
+        capabilities = self.source.get_capabilities()
+        return (
+            capabilities.center_frequency_min_hz or sys.float_info.min,
+            capabilities.center_frequency_max_hz or sys.float_info.max,
+        )
+
+    def configure_frequency_scan(self, entries: list[FrequencyScanEntry]) -> dict[str, object]:
+        minimum_hz, maximum_hz = self._frequency_scan_limits()
+        self.frequency_scan.configure(
+            entries,
+            minimum_frequency_hz=minimum_hz,
+            maximum_frequency_hz=maximum_hz,
+        )
+        return self.frequency_scan.payload()
+
+    async def start_frequency_scan(self) -> dict[str, object]:
+        minimum_hz, maximum_hz = self._frequency_scan_limits()
+        await self.frequency_scan.start(
+            minimum_frequency_hz=minimum_hz,
+            maximum_frequency_hz=maximum_hz,
+        )
+        return self.frequency_scan.payload()
+
+    async def stop_frequency_scan(self) -> dict[str, object]:
+        await self.frequency_scan.stop()
+        return self.frequency_scan.payload()
+
+    def frequency_scan_payload(self) -> dict[str, object]:
+        return self.frequency_scan.payload()
+
+    def _frequency_scan_available(self) -> bool:
+        if not self.running or self.source is None:
+            return False
+        status = self.source.get_status()
+        return status.connected and status.acquisition_running
+
+    async def _apply_frequency_scan_tune(self, center_frequency_hz: float) -> float:
+        state = await self.apply_control(_frequency_scan_owned=True, center_frequency_hz=center_frequency_hz)
+        return float(state["actual"]["center_frequency_hz"])
+
+    async def apply_control(self, *, _frequency_scan_owned: bool = False, **changes: object) -> dict[str, Any]:
+        if self.source is None:
+            raise ControlError(ControlErrorCode.DEVICE_NOT_CONNECTED, "Analyzer source is not initialized", recoverable=True)
+        if "center_frequency_hz" in changes and self.frequency_scan.running and not _frequency_scan_owned:
+            raise ControlError(
+                ControlErrorCode.DEVICE_BUSY,
+                "Manual center-frequency changes are disabled while frequency scan is running",
+                requested_value=changes["center_frequency_hz"],
+                recoverable=True,
+            )
         async with self._control_lock:
             source = self.source
             capabilities = source.get_capabilities()

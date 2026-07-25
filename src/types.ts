@@ -20,6 +20,20 @@ export interface AiDetectionResult {
   detections: AiFrequencyDetection[]
 }
 
+export type FrequencyScanControllerState = 'idle' | 'tuning' | 'dwelling' | 'stopping' | 'error'
+
+export interface FrequencyScanStatus {
+  running: boolean
+  state: FrequencyScanControllerState
+  active_entry_id: string | null
+  active_index: number | null
+  active_count: number
+  verified_center_frequency_hz: number | null
+  dwell_duration_seconds: number | null
+  remaining_dwell_seconds: number | null
+  last_error: string | null
+}
+
 export interface SpectrumFrame {
   sequence: number
   timestamp: number
@@ -104,6 +118,7 @@ export interface AnalyzerRuntimeStatus {
   resolution_tradeoff_index?: number | null
   resolution_tradeoff_state?: 'auto' | 'matched' | 'custom'
   resolution_tradeoff_step_id?: string | null
+  frequency_scan?: FrequencyScanStatus
 }
 
 export interface Viewport {

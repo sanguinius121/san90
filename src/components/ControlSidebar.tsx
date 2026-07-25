@@ -16,6 +16,7 @@ import {
   hzToDisplayValue,
   type CenterFrequencyUnit,
 } from '../data/frequencyUnits'
+import { FrequencyScanControl } from './FrequencyScanControl'
 
 const options = (values: [string,string][]) => values.map(([label,value])=>({label,value}))
 export const REFERENCE_LEVEL_STEP_DB = 10
@@ -61,9 +62,10 @@ export function ControlSidebar() {
     <div className="sidebar-scroll">
       {runtime.lastError&&<div className="control-error" role="alert">{runtime.lastError}</div>}
       <ControlSection title="Frequency">
-        <NumericControl label="Center frequency" value={hzToDisplayValue(d.centerHz,centerUnit)} unit={centerUnit} unitOptions={CENTER_FREQUENCY_UNITS} unitPrecisions={{GHz:9,MHz:6}} onUnitChange={unit=>setCenterUnit(unit as CenterFrequencyUnit)} convertUnitValue={(value,fromUnit,toUnit)=>hzToDisplayValue(displayValueToHz(value,fromUnit as CenterFrequencyUnit),toUnit as CenterFrequencyUnit)} step={hzToDisplayValue(d.stepHz,centerUnit)} precision={centerFrequencyPrecision(centerUnit)} resetToken={controlRevision} verifiedCommit validateValue={validCenterDisplayValue} onInvalid={rejectCenterFrequency} disabled={disabled||!supported('center_frequency_hz')} onChange={commitCenterFrequency}/>
+        <NumericControl label="Center frequency" value={hzToDisplayValue(d.centerHz,centerUnit)} unit={centerUnit} unitOptions={CENTER_FREQUENCY_UNITS} unitPrecisions={{GHz:9,MHz:6}} onUnitChange={unit=>setCenterUnit(unit as CenterFrequencyUnit)} convertUnitValue={(value,fromUnit,toUnit)=>hzToDisplayValue(displayValueToHz(value,fromUnit as CenterFrequencyUnit),toUnit as CenterFrequencyUnit)} step={hzToDisplayValue(d.stepHz,centerUnit)} precision={centerFrequencyPrecision(centerUnit)} resetToken={controlRevision} verifiedCommit validateValue={validCenterDisplayValue} onInvalid={rejectCenterFrequency} disabled={disabled||runtime.frequencyScan.running||!supported('center_frequency_hz')} onChange={commitCenterFrequency}/>
         <NumericControl label="Step frequency" value={d.stepHz/1e6} unit="MHz" step={1} min={.001} max={1000} precision={3} disabled={disabled} onChange={(v)=>set('stepHz',v*1e6)}/>
       </ControlSection>
+      <ControlSection title="Frequency Scan"><FrequencyScanControl minimumFrequencyHz={centerMinimumHz} maximumFrequencyHz={centerMaximumHz} disabled={loading||!supported('center_frequency_hz')}/></ControlSection>
       <ControlSection title="RF Path"><RfPathControl/></ControlSection>
       <ControlSection title="Span">
         <div className="button-matrix"><button disabled={hardware} onClick={()=>d.setSpan(d.spanHz/2)}>− SPAN</button><button disabled={hardware} onClick={()=>d.setSpan(d.spanHz*2)}>+ SPAN</button><button disabled={hardware} onClick={()=>d.setSpan(d.previousSpanHz)}>PREVIOUS</button><button disabled={hardware} onClick={()=>d.setSpan(6e9)}>FULL SPAN</button></div>
