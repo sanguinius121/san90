@@ -20,6 +20,16 @@ from .base import AnalyzerSource
 from .buffers import IntervalMaxHoldBuffer, LatestFrameBuffer
 from .control_mapping import DETECTOR_VALUES, RBW_MODE_VALUES, WINDOW_VALUES
 from .errors import AnalyzerConfigurationError, AnalyzerStateError
+from .if_agc import (
+    IF_AGC_PERIOD_MAX_S,
+    IF_AGC_PERIOD_MIN_S,
+    IF_AGC_PERIOD_UI_STEP_S,
+    IF_AGC_TARGET_MAX_DBFS,
+    IF_AGC_TARGET_MIN_DBFS,
+    IF_AGC_TARGET_UI_STEP_DB,
+    validate_if_agc_period,
+    validate_if_agc_target,
+)
 from .models import (
     AnalyzerCapabilities,
     AnalyzerActualSettings,
@@ -36,7 +46,24 @@ from .models import (
 from .raw_buffers import RawAmplitudeMapping, RawTraceMetadata
 from .spectrum_temporal import LatestSpectrumTemporalExchange, NativeSpectrumTemporalAccumulator
 from .tradeoff import SAN90_RESOLUTION_TRADEOFF_STEPS, match_actual_tradeoff_step
+from .sweep_time import (
+    SWEEP_TIME_FIXED_MULTIPLES,
+    SWEEP_TIME_MODE_VALUES,
+    validate_manual_sweep_time,
+    validate_sweep_time_mode,
+    validate_sweep_time_multiple,
+)
 from .waterfall import TimedWaterfallBatchProducer, WaterfallProducerMetrics, WaterfallRateConfig
+from .vbw import (
+    VBW_MANUAL_REQUEST_MAX_HZ,
+    VBW_MANUAL_REQUEST_MIN_HZ,
+    VBW_MANUAL_UI_STEP_HZ,
+    VBW_EXPOSED_MODES,
+    VBW_MODE_RATIOS,
+    VBW_MODE_VALUES,
+    validate_manual_vbw,
+    validate_vbw_mode,
+)
 
 
 class SimulatorSource(AnalyzerSource):
@@ -60,12 +87,17 @@ class SimulatorSource(AnalyzerSource):
             center_frequency_hz=2.45e9,
             span_hz=101.5625e6,
             rbw_hz=60.306e3,
-            vbw_hz=603.061e3,
+            vbw_hz=6.030609e3,
+            vbw_mode="ratio-0.1",
             reference_level_dbm=-10.0,
             attenuation_db=0,
             preamplifier="auto",
             gain_strategy="low-noise",
             if_agc_enabled=True,
+            if_agc_target_dbfs=-9.0,
+            if_agc_period_s=0.0,
+            sweep_time_mode="minimum",
+            sweep_time_multiple=3.0,
             sweep_time_s=1.0 / frame_rate_hz,
             window="blackman-nuttall",
             detector="positive-peak",
@@ -86,6 +118,7 @@ class SimulatorSource(AnalyzerSource):
         self._published = 0
         self._started_ns: int | None = None
         self._last_frame_ns: int | None = None
+        self._if_agc_gain_db: float | None = 6.0
         self._simulate_if_overflow = (
             os.getenv("SIMULATOR_IF_OVERFLOW", "").strip().lower() in {"1", "true", "yes", "on"}
             if simulate_if_overflow is None
@@ -133,9 +166,10 @@ class SimulatorSource(AnalyzerSource):
             source="simulator",
             measurement_modes=("rta",),
             supported_controls=frozenset({
-                "center_frequency_hz", "span_hz", "rbw_hz", "rbw_mode", "vbw_hz",
+                "center_frequency_hz", "span_hz", "rbw_hz", "rbw_mode", "vbw_mode",
                 "reference_level_dbm", "attenuation_db", "preamplifier",
-                "gain_strategy", "if_agc_enabled", "window", "detector",
+                "gain_strategy", "if_agc_enabled", "if_agc_target_dbfs", "if_agc_period_s",
+                "window", "detector",
                 "resolution_tradeoff_index", "amplitude_offset_db",
             }),
             numeric_ranges={
@@ -147,6 +181,24 @@ class SimulatorSource(AnalyzerSource):
                     AMPLITUDE_OFFSET_MAX_DB,
                     AMPLITUDE_OFFSET_STEP_DB,
                 ),
+                "if_agc_target_dbfs": NumericRange(
+                    IF_AGC_TARGET_MIN_DBFS,
+                    IF_AGC_TARGET_MAX_DBFS,
+                    IF_AGC_TARGET_UI_STEP_DB,
+                ),
+                "if_agc_period_s": NumericRange(
+                    IF_AGC_PERIOD_MIN_S,
+                    IF_AGC_PERIOD_MAX_S,
+                    IF_AGC_PERIOD_UI_STEP_S,
+                ),
+                "vbw_hz": NumericRange(
+                    VBW_MANUAL_REQUEST_MIN_HZ,
+                    VBW_MANUAL_REQUEST_MAX_HZ,
+                    VBW_MANUAL_UI_STEP_HZ,
+                ),
+            },
+            enum_values={
+                "vbw_mode": VBW_EXPOSED_MODES,
             },
             native_point_counts=tuple(step.point_count for step in SAN90_RESOLUTION_TRADEOFF_STEPS),
             supports_density=False,
@@ -193,6 +245,8 @@ class SimulatorSource(AnalyzerSource):
 
     def apply_settings(self, settings: AnalyzerSettings) -> AnalyzerSettings:
         validate_amplitude_offset(settings.amplitude_offset_db)
+        validate_if_agc_target(settings.if_agc_target_dbfs)
+        validate_if_agc_period(settings.if_agc_period_s)
         if settings.mode != "rta":
             raise AnalyzerConfigurationError("Simulator currently supports only rta mode")
         if settings.center_frequency_hz <= 0:
@@ -205,6 +259,14 @@ class SimulatorSource(AnalyzerSource):
             raise AnalyzerConfigurationError("manual RBW mode requires rbw_hz")
         if settings.rbw_hz is not None and settings.rbw_hz <= 0:
             raise AnalyzerConfigurationError("rbw_hz must be positive")
+        validate_vbw_mode(settings.vbw_mode)
+        if settings.vbw_mode == "manual":
+            validate_manual_vbw(settings.vbw_hz)
+        validate_sweep_time_mode(settings.sweep_time_mode)
+        if settings.sweep_time_mode == "custom-multiple":
+            validate_sweep_time_multiple(settings.sweep_time_multiple)
+        elif settings.sweep_time_mode == "manual":
+            validate_manual_sweep_time(settings.sweep_time_s)
         if not -80 <= settings.reference_level_dbm <= 20:
             raise AnalyzerConfigurationError("reference_level_dbm is outside simulator capabilities")
         if settings.attenuation_db is not None and not 0 <= settings.attenuation_db <= 60:
@@ -233,7 +295,29 @@ class SimulatorSource(AnalyzerSource):
                 selected_step.point_count if selected_step is not None else
                 self._native_point_count if actual_rbw < 200_000 else max(16, self._native_point_count // 2)
             )
-            self._settings = replace(settings, rbw_hz=actual_rbw)
+            actual_vbw = (
+                validate_manual_vbw(settings.vbw_hz)
+                if settings.vbw_mode == "manual"
+                else actual_rbw * VBW_MODE_RATIOS[settings.vbw_mode]
+            )
+            minimum_sweep_s = 1.0 / max(self._minimum_frame_rate_hz, 1.0)
+            if settings.sweep_time_mode == "manual":
+                actual_sweep_s = max(minimum_sweep_s, validate_manual_sweep_time(settings.sweep_time_s))
+                actual_multiple = actual_sweep_s / minimum_sweep_s
+            elif settings.sweep_time_mode == "custom-multiple":
+                actual_multiple = validate_sweep_time_multiple(settings.sweep_time_multiple)
+                actual_sweep_s = minimum_sweep_s * actual_multiple
+            else:
+                actual_multiple = SWEEP_TIME_FIXED_MULTIPLES[settings.sweep_time_mode]
+                actual_sweep_s = minimum_sweep_s * actual_multiple
+            self._settings = replace(
+                settings,
+                rbw_hz=actual_rbw,
+                vbw_hz=actual_vbw,
+                sweep_time_multiple=actual_multiple,
+                sweep_time_s=actual_sweep_s,
+            )
+            self._if_agc_gain_db = 6.0 if settings.if_agc_enabled else 0.0
             self._configuration_generation += 1
             self._max_hold = IntervalMaxHoldBuffer()
             self._spectrum_temporal.reset(generation=self._configuration_generation)
@@ -275,6 +359,7 @@ class SimulatorSource(AnalyzerSource):
             settings = replace(self._settings)
             requested = replace(self._requested_settings)
             generation = self._configuration_generation
+            if_agc_gain_db = self._if_agc_gain_db
         span = float(settings.span_hz or 0.0)
         matched = match_actual_tradeoff_step(
             SAN90_RESOLUTION_TRADEOFF_STEPS,
@@ -294,8 +379,17 @@ class SimulatorSource(AnalyzerSource):
                 attenuation_automatic=settings.attenuation_db is None,
                 preamplifier=settings.preamplifier,
                 gain_strategy=settings.gain_strategy,
+                if_agc_enabled=settings.if_agc_enabled,
+                if_agc_target_dbfs=settings.if_agc_target_dbfs,
+                if_agc_period_s=settings.if_agc_period_s,
+                if_agc_gain_db=if_agc_gain_db,
                 rbw_hz=float(settings.rbw_hz or 0.0),
                 rbw_mode=settings.rbw_mode,
+                vbw_hz=settings.vbw_hz,
+                vbw_mode=settings.vbw_mode,
+                sweep_time_mode=settings.sweep_time_mode,
+                sweep_time_multiple=settings.sweep_time_multiple,
+                sweep_time_s=settings.sweep_time_s,
                 window=settings.window,
                 detector=settings.detector,
                 fft_size=matched.fft_size if matched is not None else self._point_count,
@@ -375,6 +469,13 @@ class SimulatorSource(AnalyzerSource):
         with self._lock:
             self._simulate_if_overflow = bool(active)
 
+    def set_if_agc_gain(self, gain_db: float | None) -> None:
+        """Simulator hook for focused runtime readback tests."""
+        if gain_db is not None and not math.isfinite(gain_db):
+            raise ValueError("IF AGC gain must be finite or None")
+        with self._lock:
+            self._if_agc_gain_db = gain_db
+
     def get_device_info(self) -> DeviceInfo | None:
         if not self._connected:
             return None
@@ -420,7 +521,7 @@ class SimulatorSource(AnalyzerSource):
                     )
                     self._received += 1
                     self._last_frame_ns = frame.timestamp_ns
-                    period = 1.0 / self._frame_rate_hz
+                    period = max(1.0 / self._frame_rate_hz, float(self._settings.sweep_time_s or 0.0))
             except Exception:
                 self._stop_event.set()
                 raise

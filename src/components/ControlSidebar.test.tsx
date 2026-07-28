@@ -47,10 +47,22 @@ const tradeoffCapabilities={...capabilities,
   resolution_tradeoff_direction:{left:'time',right:'frequency'},
   default_resolution_tradeoff_index:5,supports_auto_rbw:true,
 }
+const ifAgcCapabilities={...capabilities,
+  supported_controls:[...capabilities.supported_controls,'if_agc_enabled','if_agc_target_dbfs','if_agc_period_s'],
+  numeric_ranges:{...capabilities.numeric_ranges,
+    if_agc_target_dbfs:{minimum:-30,maximum:0,step:1},
+    if_agc_period_s:{minimum:-1,maximum:2_147_483,step:1},
+  },
+}
+const vbwCapabilities={...capabilities,
+  supported_controls:[...capabilities.supported_controls,'rbw_hz','rbw_mode','vbw_mode'],
+  numeric_ranges:{...capabilities.numeric_ranges,vbw_hz:{minimum:1,maximum:200_000_000,step:1}},
+  enum_values:{vbw_mode:['ratio-1','ratio-0.1']},
+}
 
 function settings(center = 2.45e9, generation = 1): AnalyzerSettingsApi {
   return {
-    requested: { center_frequency_hz: center, reference_level_dbm: 0, attenuation_db: null, preamplifier: 'off', gain_strategy: 'low-noise', rbw_hz: null, rbw_mode: 'auto', window: null, detector: null, amplitude_offset_db: 0 },
+    requested: { center_frequency_hz: center, reference_level_dbm: 0, attenuation_db: null, preamplifier: 'off', gain_strategy: 'low-noise', rbw_hz: null, rbw_mode: 'auto', vbw_hz:6_030.609, vbw_mode:'ratio-0.1', sweep_time_mode:'minimum', sweep_time_multiple:3, sweep_time_s:null, window: null, detector: null, amplitude_offset_db: 0 },
     actual: {
       center_frequency_hz: center,
       start_frequency_hz: center - 50_781_250,
@@ -61,8 +73,17 @@ function settings(center = 2.45e9, generation = 1): AnalyzerSettingsApi {
       attenuation_automatic: true,
       preamplifier: 'off',
       gain_strategy: 'low-noise',
+      if_agc_enabled: true,
+      if_agc_target_dbfs: -9,
+      if_agc_period_s: 0,
+      if_agc_gain_db: null,
       rbw_hz: 60_306.091,
       rbw_mode: 'auto',
+      vbw_hz:6_030.609,
+      vbw_mode:'ratio-0.1',
+      sweep_time_mode:'minimum',
+      sweep_time_multiple:1,
+      sweep_time_s:32.768e-6,
       window: 'blackman-nuttall',
       detector: 'positive-peak',
       fft_size: 4096,
@@ -100,6 +121,33 @@ afterEach(() => {
 })
 
 describe('ControlSidebar hardware controls', () => {
+  it('does not expose a user-adjustable span section', async () => {
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/api/analyzer/capabilities')) return json(capabilities)
+      if (url.endsWith('/api/analyzer/settings')) return json(settings())
+      return json({}, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ControlSidebar />)
+    await screen.findByLabelText('Center frequency')
+    expect(screen.queryByRole('button', {name: 'Span'})).toBeNull()
+    expect(screen.queryByText('FULL SPAN')).toBeNull()
+  })
+
+  it('does not expose the Trigger section', async () => {
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.endsWith('/api/analyzer/capabilities')) return json(capabilities)
+      if (url.endsWith('/api/analyzer/settings')) return json(settings())
+      return json({}, 404)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ControlSidebar />)
+    await screen.findByLabelText('Center frequency')
+    expect(screen.queryByRole('button', {name: 'Trigger'})).toBeNull()
+  })
+
   it('disables manual center frequency while backend scan status is running and restores it after stop', async () => {
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input)
@@ -426,5 +474,164 @@ describe('ControlSidebar hardware controls', () => {
     expect(fetchMock.mock.calls.filter(([url])=>String(url).endsWith('/api/analyzer/resolution-tradeoff'))).toHaveLength(1)
     fireEvent.change(rbwMode,{target:{value:'auto'}})
     await waitFor(()=>expect(screen.queryByLabelText('Time/Frequency resolution trade-off')).toBeNull())
+  })
+
+  it('shows only hardware-advertised VBW modes and keeps ratio readback read-only',async()=>{
+    const current=settings()
+    const fetchMock=vi.fn((input:string|URL|Request)=>{
+      const url=String(input)
+      if(url.endsWith('/api/analyzer/capabilities'))return json(vbwCapabilities)
+      if(url.endsWith('/api/analyzer/settings'))return json(current)
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    const mode=await screen.findByLabelText('VBW mode') as HTMLSelectElement
+    await waitFor(()=>expect(mode.disabled).toBe(false))
+    expect([...mode.options].map(option=>option.text)).toEqual(['VBW = RBW','VBW = 0.1 × RBW'])
+    const value=screen.getByLabelText('VBW') as HTMLInputElement
+    expect(value.disabled).toBe(true)
+    expect(value.value).toBe('6.030609')
+    expect((screen.getByLabelText('VBW unit') as HTMLSelectElement).value).toBe('kHz')
+    expect((screen.getByLabelText('Decrease VBW') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Increase VBW') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('commits VBW mode and displays verified RBW-dependent readback',async()=>{
+    let current=settings()
+    const requests:Array<Record<string,unknown>>=[]
+    const fetchMock=vi.fn((input:string|URL|Request,init?:RequestInit)=>{
+      const url=String(input)
+      if(url.endsWith('/api/analyzer/capabilities'))return json(vbwCapabilities)
+      if(url.endsWith('/api/analyzer/settings'))return json(current)
+      if(url.endsWith('/api/analyzer/bandwidth/vbw')&&init?.method==='PUT'){
+        const body=JSON.parse(String(init.body));requests.push(body)
+        current={...current,actual:{...current.actual,vbw_mode:body.mode,vbw_hz:24_122.4365,rbw_hz:241_224.365}}
+        return json(current)
+      }
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    const mode=await screen.findByLabelText('VBW mode') as HTMLSelectElement
+    fireEvent.change(mode,{target:{value:'ratio-0.1'}})
+    await waitFor(()=>expect(requests).toEqual([{mode:'ratio-0.1'}]))
+    await waitFor(()=>expect((screen.getByLabelText('VBW') as HTMLInputElement).value).toBe('24.122436'))
+  })
+
+  it('commits IF AGC toggle and uses verified target readback without polling over an active draft',async()=>{
+    let current=settings()
+    const requests:Array<{path:string;body:Record<string,unknown>}>=[]
+    const fetchMock=vi.fn((input:string|URL|Request,init?:RequestInit)=>{
+      const url=String(input)
+      if(url.endsWith('/api/analyzer/capabilities'))return json(ifAgcCapabilities)
+      if(url.endsWith('/api/analyzer/settings'))return json(current)
+      if(url.endsWith('/api/analyzer/amplitude/if-agc')&&init?.method==='PUT'){
+        const body=JSON.parse(String(init.body));requests.push({path:'enabled',body})
+        current={...current,actual:{...current.actual,if_agc_enabled:body.enabled}}
+        return json(current)
+      }
+      if(url.endsWith('/api/analyzer/amplitude/if-agc/target')&&init?.method==='PUT'){
+        const body=JSON.parse(String(init.body));requests.push({path:'target',body})
+        current={...current,actual:{...current.actual,if_agc_target_dbfs:-8}}
+        return json(current)
+      }
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    const toggle=await screen.findByRole('switch')
+    await waitFor(()=>expect((toggle as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(toggle)
+    await waitFor(()=>expect(requests[0]).toEqual({path:'enabled',body:{enabled:false}}))
+
+    act(()=>useDeviceStore.setState({ifAgc:true}))
+    const target=screen.getByLabelText('IF AGC target') as HTMLInputElement
+    fireEvent.focus(target);fireEvent.change(target,{target:{value:'-7'}})
+    act(()=>useDeviceStore.setState({ifAgcTargetDbfs:-20}))
+    expect(target.value).toBe('-7')
+    fireEvent.keyDown(target,{key:'Enter'})
+    await waitFor(()=>expect(requests.at(-1)).toEqual({path:'target',body:{target_dbfs:-7}}))
+    await waitFor(()=>expect(target.value).toBe('-8'))
+  })
+
+  it('maps one-shot, dynamic, and periodic IF AGC modes to native seconds',async()=>{
+    let current=settings()
+    const periods:number[]=[]
+    const fetchMock=vi.fn((input:string|URL|Request,init?:RequestInit)=>{
+      const url=String(input)
+      if(url.endsWith('/api/analyzer/capabilities'))return json(ifAgcCapabilities)
+      if(url.endsWith('/api/analyzer/settings'))return json(current)
+      if(url.endsWith('/api/analyzer/amplitude/if-agc/period')&&init?.method==='PUT'){
+        const body=JSON.parse(String(init.body)) as {period_s:number};periods.push(body.period_s)
+        current={...current,actual:{...current.actual,if_agc_period_s:body.period_s}}
+        return json(current)
+      }
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    const mode=await screen.findByLabelText('IF AGC period mode') as HTMLSelectElement
+    await waitFor(()=>expect(mode.disabled).toBe(false))
+    fireEvent.change(mode,{target:{value:'one-shot'}})
+    await waitFor(()=>expect(periods).toEqual([-1]))
+    fireEvent.change(mode,{target:{value:'dynamic'}})
+    await waitFor(()=>expect(periods).toEqual([-1,0]))
+    fireEvent.change(mode,{target:{value:'periodic'}})
+    await waitFor(()=>expect(periods).toEqual([-1,0,1]))
+    const period=await screen.findByLabelText('IF AGC period')
+    fireEvent.focus(period);fireEvent.change(period,{target:{value:'2'}});fireEvent.keyDown(period,{key:'Enter'})
+    await waitFor(()=>expect(periods).toEqual([-1,0,1,2]))
+  })
+
+  it('disables target and period when AGC is off but always renders gain as read-only',async()=>{
+    const current=settings()
+    current.actual.if_agc_enabled=false
+    current.actual.if_agc_gain_db=null
+    const fetchMock=vi.fn((input:string|URL|Request)=>{
+      const url=String(input)
+      if(url.endsWith('/api/analyzer/capabilities'))return json(ifAgcCapabilities)
+      if(url.endsWith('/api/analyzer/settings'))return json(current)
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    const target=await screen.findByLabelText('IF AGC target') as HTMLInputElement
+    await waitFor(()=>expect(target.disabled).toBe(true))
+    expect((screen.getByLabelText('IF AGC period mode') as HTMLSelectElement).disabled).toBe(true)
+    const gain=screen.getByLabelText('IF AGC gain') as HTMLInputElement
+    expect(gain.value).toBe('—')
+    expect(gain.disabled).toBe(true)
+    expect((screen.getByLabelText('Decrease IF AGC gain') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Increase IF AGC gain') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('renders positive, negative, zero, and unavailable runtime IF AGC gain',async()=>{
+    const current=settings()
+    current.actual.if_agc_gain_db=null
+    const fetchMock=vi.fn((input:string|URL|Request)=>{
+      const url=String(input)
+      if(url.endsWith('/api/analyzer/capabilities'))return json(ifAgcCapabilities)
+      if(url.endsWith('/api/analyzer/settings'))return json(current)
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    const gain=await screen.findByLabelText('IF AGC gain') as HTMLInputElement
+    await waitFor(()=>expect(gain.value).toBe('—'))
+    for(const [value,text] of [[6,'6'],[-3.5,'-3.5'],[0,'0'],[null,'—']] as const){
+      act(()=>useDeviceStore.setState({ifAgcGainDb:value}))
+      expect(gain.value).toBe(text)
+    }
+  })
+
+  it('removes Sweep controls and keeps Window function available',async()=>{
+    const current=settings()
+    const fetchMock=vi.fn((input:string|URL|Request)=>{
+      const url=String(input)
+      if(url.endsWith('/api/analyzer/capabilities'))return json(vbwCapabilities)
+      if(url.endsWith('/api/analyzer/settings'))return json(current)
+      return json({},404)
+    })
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    await screen.findByLabelText('VBW mode')
+    expect(screen.queryByRole('button',{name:'Sweep'})).toBeNull()
+    expect(screen.queryByLabelText('Sweep time mode')).toBeNull()
+    expect(screen.queryByLabelText('Actual sweep time')).toBeNull()
+    expect(screen.getByLabelText('Window function')).toBeTruthy()
   })
 })

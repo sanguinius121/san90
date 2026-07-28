@@ -3,6 +3,7 @@ export interface AnalyzerCapabilitiesApi {
   source:string
   supported_controls:string[]
   numeric_ranges?:Record<string,{minimum:number;maximum:number;step:number|null}>
+  enum_values?:Record<string,string[]>
   center_frequency_min_hz:number|null
   center_frequency_max_hz:number|null
   center_frequency_step_hz:number|null
@@ -38,8 +39,8 @@ export interface AnalyzerCapabilitiesApi {
 }
 
 export interface AnalyzerSettingsApi {
-  requested:{center_frequency_hz:number;reference_level_dbm:number;attenuation_db:number|null;preamplifier:string|null;gain_strategy:string|null;rbw_hz:number|null;rbw_mode:string;window:string|null;detector:string|null;amplitude_offset_db?:number}
-  actual:{center_frequency_hz:number;start_frequency_hz:number;stop_frequency_hz:number;span_hz:number;reference_level_dbm:number;attenuation_db:number|null;attenuation_automatic:boolean;preamplifier:string|null;gain_strategy:string|null;rbw_hz:number;rbw_mode:string;window:string|null;detector:string|null;fft_size:number;scale_to_dbm:number|null;offset_to_dbm:number|null;point_count:number;resolution_tradeoff_index:number|null;resolution_tradeoff_state:'auto'|'matched'|'custom';resolution_tradeoff_step_id:string|null;frequency_bin_spacing_hz:number|null;amplitude_offset_db?:number}
+  requested:{center_frequency_hz:number;reference_level_dbm:number;attenuation_db:number|null;preamplifier:string|null;gain_strategy:string|null;rbw_hz:number|null;rbw_mode:string;vbw_hz?:number|null;vbw_mode?:string;sweep_time_mode?:string;sweep_time_multiple?:number;sweep_time_s?:number|null;window:string|null;detector:string|null;amplitude_offset_db?:number;if_agc_enabled?:boolean|null;if_agc_target_dbfs?:number;if_agc_period_s?:number}
+  actual:{center_frequency_hz:number;start_frequency_hz:number;stop_frequency_hz:number;span_hz:number;reference_level_dbm:number;attenuation_db:number|null;attenuation_automatic:boolean;preamplifier:string|null;gain_strategy:string|null;rbw_hz:number;rbw_mode:string;vbw_hz?:number|null;vbw_mode?:string|null;sweep_time_mode?:string|null;sweep_time_multiple?:number|null;sweep_time_s?:number|null;window:string|null;detector:string|null;fft_size:number;scale_to_dbm:number|null;offset_to_dbm:number|null;point_count:number;resolution_tradeoff_index:number|null;resolution_tradeoff_state:'auto'|'matched'|'custom';resolution_tradeoff_step_id:string|null;frequency_bin_spacing_hz:number|null;amplitude_offset_db?:number;if_agc_enabled?:boolean|null;if_agc_target_dbfs?:number|null;if_agc_period_s?:number|null;if_agc_gain_db?:number|null}
   configuration_generation:number
 }
 
@@ -47,7 +48,11 @@ export interface FrequencyScanEntryApi {
   id:string
   enabled:boolean
   center_frequency_hz:number
-  duration_seconds:number
+  duration_ms:number
+  duration_seconds?:number
+  step_hz:number
+  display_unit:'MHz'|'GHz'
+  step_unit:'MHz'|'GHz'
 }
 
 export interface FrequencyScanApi {
@@ -61,6 +66,8 @@ export interface FrequencyScanApi {
   dwell_duration_seconds:number|null
   remaining_dwell_seconds:number|null
   last_error:string|null
+  configuration_save_error:string|null
+  configuration_load_warning:string|null
 }
 
 export type RfPathId = 'rf1'|'rf2'|'rf3'|'rf4'|'rf5'|'rf6'|'rf7'|'rf8'

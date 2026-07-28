@@ -68,6 +68,16 @@ from .htra import (
     version_string,
 )
 from .if_overflow import IfOverflowLatch, classify_rta_read_status
+from .if_agc import (
+    IF_AGC_PERIOD_MAX_S,
+    IF_AGC_PERIOD_MIN_S,
+    IF_AGC_PERIOD_UI_STEP_S,
+    IF_AGC_TARGET_MAX_DBFS,
+    IF_AGC_TARGET_MIN_DBFS,
+    IF_AGC_TARGET_UI_STEP_DB,
+    validate_if_agc_period,
+    validate_if_agc_target,
+)
 from .models import (
     AnalyzerCapabilities,
     AnalyzerActualSettings,
@@ -83,6 +93,24 @@ from .models import (
 )
 from .spectrum_temporal import LatestSpectrumTemporalExchange, NativeSpectrumTemporalAccumulator
 from .tradeoff import SAN90_RESOLUTION_TRADEOFF_STEPS, match_actual_tradeoff_step
+from .sweep_time import (
+    SWEEP_TIME_FIXED_MULTIPLES,
+    SWEEP_TIME_MODE_VALUES,
+    actual_trace_period_s,
+    validate_manual_sweep_time,
+    validate_sweep_time_mode,
+    validate_sweep_time_multiple,
+)
+from .vbw import (
+    VBW_MANUAL_REQUEST_MAX_HZ,
+    VBW_MANUAL_REQUEST_MIN_HZ,
+    VBW_MANUAL_UI_STEP_HZ,
+    VBW_EXPOSED_MODES,
+    VBW_MODE_VALUES,
+    validate_manual_vbw,
+    validate_vbw_mode,
+    verified_vbw_hz,
+)
 from .raw_buffers import (
     DisplaySnapshot,
     DisplaySnapshotExchange,
@@ -222,12 +250,17 @@ class San90Source(AnalyzerSource):
             center_frequency_hz=1.0e9,
             span_hz=None,
             rbw_hz=None,
-            vbw_hz=None,
+            vbw_hz=6_030.609,
+            vbw_mode="ratio-0.1",
             reference_level_dbm=0.0,
             attenuation_db=None,
             preamplifier="off",
             gain_strategy=None,
             if_agc_enabled=None,
+            if_agc_target_dbfs=-9.0,
+            if_agc_period_s=0.0,
+            sweep_time_mode="minimum",
+            sweep_time_multiple=3.0,
             sweep_time_s=None,
             window=None,
             detector=None,
@@ -250,6 +283,9 @@ class San90Source(AnalyzerSource):
         self._rate_started_ns: int | None = None
         self._rate_received_baseline = 0
         self._temperature_c: float | None = None
+        self._if_agc_gain_db: float | None = None
+        self._if_agc_gain_monotonic_ns: int | None = None
+        self._next_if_agc_gain_sample_ns = 0
         self._diagnostics = San90Diagnostics()
         spectrum_override = os.getenv("SAN90_SPECTRUM_FPS")
         self._spectrum_fps_override = (
@@ -307,7 +343,9 @@ class San90Source(AnalyzerSource):
             measurement_modes=("rta",),
             supported_controls=frozenset({
                 "center_frequency_hz", "reference_level_dbm", "attenuation_db",
-                "preamplifier", "gain_strategy", "rbw_hz", "rbw_mode", "window", "detector",
+                "preamplifier", "gain_strategy", "rbw_hz", "rbw_mode", "vbw_mode",
+                "window", "detector",
+                "if_agc_enabled", "if_agc_target_dbfs", "if_agc_period_s",
                 "resolution_tradeoff_index", "amplitude_offset_db",
             }),
             numeric_ranges={
@@ -316,6 +354,21 @@ class San90Source(AnalyzerSource):
                     AMPLITUDE_OFFSET_MAX_DB,
                     AMPLITUDE_OFFSET_STEP_DB,
                 ),
+                "if_agc_target_dbfs": NumericRange(
+                    IF_AGC_TARGET_MIN_DBFS,
+                    IF_AGC_TARGET_MAX_DBFS,
+                    IF_AGC_TARGET_UI_STEP_DB,
+                ),
+                "if_agc_period_s": NumericRange(
+                    IF_AGC_PERIOD_MIN_S,
+                    IF_AGC_PERIOD_MAX_S,
+                    IF_AGC_PERIOD_UI_STEP_S,
+                ),
+                "vbw_hz": NumericRange(
+                    VBW_MANUAL_REQUEST_MIN_HZ,
+                    VBW_MANUAL_REQUEST_MAX_HZ,
+                    VBW_MANUAL_UI_STEP_HZ,
+                ),
             },
             enum_values={
                 "preamplifier": tuple(PREAMPLIFIER_VALUES),
@@ -323,6 +376,7 @@ class San90Source(AnalyzerSource):
                 "rbw_mode": tuple(RBW_MODE_VALUES),
                 "window": tuple(WINDOW_VALUES),
                 "detector": tuple(DETECTOR_VALUES),
+                "vbw_mode": VBW_EXPOSED_MODES,
             },
             native_point_counts=points,
             supports_density=True,
@@ -387,6 +441,11 @@ class San90Source(AnalyzerSource):
             requested = replace(self._requested_settings)
             frame_info = self._frame_info
             generation = self._configuration_generation
+            gain_age_ns = (
+                None if self._if_agc_gain_monotonic_ns is None
+                else time.monotonic_ns() - self._if_agc_gain_monotonic_ns
+            )
+            if_agc_gain_db = self._if_agc_gain_db if gain_age_ns is not None and gain_age_ns <= 1_000_000_000 else None
         if frame_info is None:
             raise AnalyzerStateError("SAN-90 has not been configured")
         mapping = self.latest_raw_amplitude_mapping()
@@ -412,8 +471,17 @@ class San90Source(AnalyzerSource):
                 attenuation_automatic=attenuation_automatic,
                 preamplifier=settings.preamplifier,
                 gain_strategy=settings.gain_strategy,
+                if_agc_enabled=settings.if_agc_enabled,
+                if_agc_target_dbfs=settings.if_agc_target_dbfs,
+                if_agc_period_s=settings.if_agc_period_s,
+                if_agc_gain_db=if_agc_gain_db,
                 rbw_hz=float(settings.rbw_hz or 0.0),
                 rbw_mode=settings.rbw_mode,
+                vbw_hz=settings.vbw_hz,
+                vbw_mode=settings.vbw_mode,
+                sweep_time_mode=settings.sweep_time_mode,
+                sweep_time_multiple=settings.sweep_time_multiple,
+                sweep_time_s=settings.sweep_time_s,
                 window=settings.window,
                 detector=settings.detector,
                 fft_size=int(frame_info.FFTSize),
@@ -721,6 +789,54 @@ class San90Source(AnalyzerSource):
             self._spectrum_temporal_accumulator = None
             self._spectrum_temporal_exchange.clear()
             self._if_overflow.clear()
+            self._if_agc_gain_db = None
+            self._if_agc_gain_monotonic_ns = None
+            self._next_if_agc_gain_sample_ns = 0
+
+    def _configure_if_agc_on_owner(
+        self,
+        profile_in: RtaProfile,
+        requested: AnalyzerSettings,
+    ) -> tuple[float, float]:
+        """Apply profile enable plus device-global target/period in owner-thread order."""
+        if requested.if_agc_enabled is not None:
+            profile_in.EnableIFAGC = int(requested.if_agc_enabled)
+        target = ct.c_double(validate_if_agc_target(requested.if_agc_target_dbfs))
+        status = int(self._api.lib.Device_SetIFAGCTarget(ct.byref(self._device), ct.byref(target)))
+        logger.info(
+            "if_agc_target_readback sdk_status=%s requested_dbfs=%.6f actual_dbfs=%.6f",
+            status,
+            requested.if_agc_target_dbfs,
+            target.value,
+        )
+        self._api.require_ok("Device_SetIFAGCTarget", status)
+        period = ct.c_double(validate_if_agc_period(requested.if_agc_period_s))
+        status = int(self._api.lib.Device_SetIFAGCPeriod(ct.byref(self._device), ct.byref(period)))
+        logger.info(
+            "if_agc_period_readback sdk_status=%s requested_s=%.6f actual_s=%.6f",
+            status,
+            requested.if_agc_period_s,
+            period.value,
+        )
+        self._api.require_ok("Device_SetIFAGCPeriod", status)
+        if not math.isfinite(target.value) or not math.isfinite(period.value):
+            raise AnalyzerConfigurationError("SAN-90 returned non-finite IF AGC target or period")
+        return float(target.value), float(period.value)
+
+    @staticmethod
+    def _configure_vbw_profile(profile_in: RtaProfile, requested: AnalyzerSettings) -> None:
+        profile_in.VBWMode = VBW_MODE_VALUES[validate_vbw_mode(requested.vbw_mode)]
+        if requested.vbw_mode == "manual":
+            profile_in.VBW_Hz = validate_manual_vbw(requested.vbw_hz)
+
+    @staticmethod
+    def _configure_sweep_time_profile(profile_in: RtaProfile, requested: AnalyzerSettings) -> None:
+        mode = validate_sweep_time_mode(requested.sweep_time_mode)
+        profile_in.SweepTimeMode = SWEEP_TIME_MODE_VALUES[mode]
+        if mode == "custom-multiple":
+            profile_in.SweepTime = validate_sweep_time_multiple(requested.sweep_time_multiple)
+        elif mode == "manual":
+            profile_in.SweepTime = validate_manual_sweep_time(requested.sweep_time_s)
 
     def _configure_on_owner(self, requested: AnalyzerSettings) -> AnalyzerSettings:
         if not self._connected or not self._device.value:
@@ -744,28 +860,28 @@ class San90Source(AnalyzerSource):
             profile_in.RBW_Hz = requested.rbw_hz
         else:
             profile_in.RBWMode = RBW_AUTO
-        if requested.vbw_hz is not None:
-            profile_in.VBWMode = 0  # VBW_Manual in htra_api.h.
-            profile_in.VBW_Hz = requested.vbw_hz
+        self._configure_vbw_profile(profile_in, requested)
+        self._configure_sweep_time_profile(profile_in, requested)
         if requested.attenuation_db is not None:
             profile_in.Atten = requested.attenuation_db
         if requested.gain_strategy is not None:
             profile_in.GainStrategy = GAIN_STRATEGY_VALUES[requested.gain_strategy]
-        if requested.if_agc_enabled is not None:
-            profile_in.EnableIFAGC = int(requested.if_agc_enabled)
+        actual_if_agc_target_dbfs, actual_if_agc_period_s = self._configure_if_agc_on_owner(
+            profile_in,
+            requested,
+        )
         if requested.window is not None:
             profile_in.Window = WINDOW_VALUES[requested.window]
         if requested.detector is not None:
             profile_in.Detector = DETECTOR_VALUES[requested.detector]
-        if requested.sweep_time_s is not None:
-            profile_in.SweepTimeMode = 7  # SWTMode_Manual in htra_api.h.
-            profile_in.SweepTime = requested.sweep_time_s
-
         profile_out = RtaProfile()
         frame_info = RtaFrameInfo()
         logger.info(
             "rta_configuration_request attenuation_mode=%s requested_attenuation_db=%s "
-            "profile_in_atten=%s preamplifier=%s gain_strategy=%s reference_level_dbm=%.3f if_agc=%s",
+            "profile_in_atten=%s preamplifier=%s gain_strategy=%s reference_level_dbm=%.3f "
+            "if_agc=%s if_agc_target_dbfs=%.6f if_agc_period_s=%.6f "
+            "vbw_mode=%s requested_vbw_hz=%s profile_in_vbw_hz=%.6f "
+            "sweep_time_mode=%s profile_in_sweep_time=%.9f",
             "auto" if requested.attenuation_db is None else "manual",
             requested.attenuation_db,
             int(profile_in.Atten),
@@ -773,19 +889,36 @@ class San90Source(AnalyzerSource):
             enum_name(GAIN_STRATEGY_VALUES, int(profile_in.GainStrategy)),
             float(profile_in.RefLevel_dBm),
             bool(profile_in.EnableIFAGC),
+            actual_if_agc_target_dbfs,
+            actual_if_agc_period_s,
+            enum_name(VBW_MODE_VALUES, int(profile_in.VBWMode)),
+            requested.vbw_hz,
+            float(profile_in.VBW_Hz),
+            enum_name(SWEEP_TIME_MODE_VALUES, int(profile_in.SweepTimeMode)),
+            float(profile_in.SweepTime),
         )
         status = int(self._api.lib.RTA_Configuration(
             ct.byref(self._device), ct.byref(profile_in), ct.byref(profile_out), ct.byref(frame_info)
         ))
         logger.info(
             "rta_configuration_readback sdk_status=%s profile_out_atten=%s "
-            "preamplifier=%s gain_strategy=%s reference_level_dbm=%.3f if_agc=%s",
+            "preamplifier=%s gain_strategy=%s reference_level_dbm=%.3f if_agc=%s "
+            "if_agc_target_dbfs=%.6f if_agc_period_s=%.6f "
+            "vbw_mode=%s actual_vbw_hz=%.6f sweep_time_mode=%s "
+            "profile_out_sweep_time=%.9f trace_period_s=%.9f",
             status,
             int(profile_out.Atten),
             enum_name(PREAMPLIFIER_VALUES, int(profile_out.Preamplifier)),
             enum_name(GAIN_STRATEGY_VALUES, int(profile_out.GainStrategy)),
             float(profile_out.RefLevel_dBm),
             bool(profile_out.EnableIFAGC),
+            actual_if_agc_target_dbfs,
+            actual_if_agc_period_s,
+            enum_name(VBW_MODE_VALUES, int(profile_out.VBWMode)),
+            float(profile_out.VBW_Hz),
+            enum_name(SWEEP_TIME_MODE_VALUES, int(profile_out.SweepTimeMode)),
+            float(profile_out.SweepTime),
+            float(frame_info.PacketAcqTime) / int(frame_info.PacketFrame) if frame_info.PacketFrame else math.nan,
         )
         self._api.require_ok("RTA_Configuration", status)
         amplifier_state = ct.c_int()
@@ -845,13 +978,24 @@ class San90Source(AnalyzerSource):
             span_hz=float(frame_info.StopFrequency_Hz - frame_info.StartFrequency_Hz),
             rbw_hz=float(profile_out.RBW_Hz),
             rbw_mode=enum_name(RBW_MODE_VALUES, int(profile_out.RBWMode)) or requested.rbw_mode,
-            vbw_hz=float(profile_out.VBW_Hz),
+            vbw_hz=verified_vbw_hz(profile_out.VBW_Hz),
+            vbw_mode=enum_name(VBW_MODE_VALUES, int(profile_out.VBWMode)) or requested.vbw_mode,
             reference_level_dbm=float(profile_out.RefLevel_dBm),
             attenuation_db=actual_attenuation_db,
             preamplifier=enum_name(PREAMPLIFIER_VALUES, int(profile_out.Preamplifier)),
             gain_strategy=enum_name(GAIN_STRATEGY_VALUES, int(profile_out.GainStrategy)),
             if_agc_enabled=bool(profile_out.EnableIFAGC),
-            sweep_time_s=float(profile_out.SweepTime),
+            if_agc_target_dbfs=actual_if_agc_target_dbfs,
+            if_agc_period_s=actual_if_agc_period_s,
+            sweep_time_mode=enum_name(SWEEP_TIME_MODE_VALUES, int(profile_out.SweepTimeMode)) or requested.sweep_time_mode,
+            sweep_time_multiple=(
+                float(profile_out.SweepTime)
+                if int(profile_out.SweepTimeMode) == SWEEP_TIME_MODE_VALUES["custom-multiple"]
+                else SWEEP_TIME_FIXED_MULTIPLES.get(
+                    enum_name(SWEEP_TIME_MODE_VALUES, int(profile_out.SweepTimeMode)) or ""
+                )
+            ),
+            sweep_time_s=actual_trace_period_s(float(frame_info.PacketAcqTime), int(frame_info.PacketFrame)),
             window=enum_name(WINDOW_VALUES, int(profile_out.Window)),
             detector=enum_name(DETECTOR_VALUES, int(profile_out.Detector)),
             amplitude_offset_db=requested.amplitude_offset_db,
@@ -876,6 +1020,9 @@ class San90Source(AnalyzerSource):
             self._spectrum_temporal_exchange.clear()
             self._spectrum_fps = spectrum_fps
             self._settings = actual
+            self._if_agc_gain_db = None
+            self._if_agc_gain_monotonic_ns = None
+            self._next_if_agc_gain_sample_ns = 0
             self._configured = True
         return replace(actual)
 
@@ -1135,6 +1282,7 @@ class San90Source(AnalyzerSource):
         span = stop - start
         host_timestamp_ns = time.time_ns()
         receipt_monotonic_ns = time.monotonic_ns()
+        self._update_if_agc_gain_from_auxiliary(auxiliary, receipt_monotonic_ns)
         latest_sequence = self._sequence + count - 1
         latest_device_timestamp_ns = packet_timestamp_ns + (count - 1) * timestamp_step_ns
         metadata = RawTraceMetadata(
@@ -1221,9 +1369,21 @@ class San90Source(AnalyzerSource):
             self._last_frame_ns = latest_device_timestamp_ns
             self._temperature_c = float(auxiliary.Temperature) * 0.01
 
+    def _update_if_agc_gain_from_auxiliary(self, auxiliary: MeasAuxInfo, now_ns: int) -> None:
+        """Sample the acquisition-provided runtime gain at a bounded 10 Hz."""
+        if now_ns < self._next_if_agc_gain_sample_ns:
+            return
+        gain = float(auxiliary.IFAGCGain)
+        with self._state_lock:
+            self._if_agc_gain_db = gain if math.isfinite(gain) else None
+            self._if_agc_gain_monotonic_ns = now_ns
+            self._next_if_agc_gain_sample_ns = now_ns + 100_000_000
+
     @staticmethod
     def _validate_settings(settings: AnalyzerSettings) -> None:
         validate_amplitude_offset(settings.amplitude_offset_db)
+        validate_if_agc_target(settings.if_agc_target_dbfs)
+        validate_if_agc_period(settings.if_agc_period_s)
         if settings.mode != "rta":
             raise UnsupportedSettingError("Phase 5 SAN-90 integration supports only SDK RTA mode")
         if settings.span_hz is not None:
@@ -1238,7 +1398,15 @@ class San90Source(AnalyzerSource):
             raise AnalyzerConfigurationError(f"Unsupported rbw_mode {settings.rbw_mode!r}; expected one of {tuple(RBW_MODE_VALUES)}")
         if settings.rbw_mode == "manual" and settings.rbw_hz is None:
             raise AnalyzerConfigurationError("manual RBW mode requires rbw_hz")
-        for name in ("rbw_hz", "vbw_hz", "sweep_time_s"):
+        validate_vbw_mode(settings.vbw_mode)
+        if settings.vbw_mode == "manual":
+            validate_manual_vbw(settings.vbw_hz)
+        validate_sweep_time_mode(settings.sweep_time_mode)
+        if settings.sweep_time_mode == "custom-multiple":
+            validate_sweep_time_multiple(settings.sweep_time_multiple)
+        elif settings.sweep_time_mode == "manual":
+            validate_manual_sweep_time(settings.sweep_time_s)
+        for name in ("rbw_hz",):
             value = getattr(settings, name)
             if value is not None and (not math.isfinite(value) or value <= 0):
                 raise AnalyzerConfigurationError(f"{name} must be finite and positive")

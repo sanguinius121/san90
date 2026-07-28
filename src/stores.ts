@@ -4,23 +4,21 @@ import type { RfSwitchStatusApi } from './data/controlApi'
 import { DEFAULT_SPECTRUM_DYNAMIC_RANGE_DB, spectrumRangeForReferenceLevel } from './rendering/amplitudeScale'
 
 interface DeviceState {
-  centerHz: number; stepHz: number; spanHz: number; previousSpanHz: number
+  centerHz: number; stepHz: number; spanHz: number
   referenceDbm: number; attenuationDb: number; attenuationAutomatic:boolean; preamplifier: string; gainStrategy: string; amplitudeOffsetDb: number
-  ifAgc: boolean; ifAgcTargetDbfs: number; ifAgcPeriodMs: number; ifAgcGainDb: number
-  rbwMode: string; rbwHz: number; vbwMode: string; vbwHz: number; sweepTimeMode: string; window: string; detector: string
+  ifAgc: boolean; ifAgcTargetDbfs: number; ifAgcPeriodS: number; ifAgcGainDb: number|null
+  rbwMode: string; rbwHz: number; vbwMode: string; vbwHz: number; window: string; detector: string
   resolutionTradeoffIndex:number;resolutionTradeoffState:'auto'|'matched'|'custom'|'pending'
   set: <K extends keyof Omit<DeviceState, 'set'>>(key: K, value: DeviceState[K]) => void
-  setSpan: (span: number) => void
 }
 
-export const useDeviceStore = create<DeviceState>((set, get) => ({
-  centerHz: 2.45e9, stepHz: 10e6, spanHz: 101.5625e6, previousSpanHz: 101.5625e6,
+export const useDeviceStore = create<DeviceState>((set) => ({
+  centerHz: 2.45e9, stepHz: 10e6, spanHz: 101.5625e6,
   referenceDbm: -10, attenuationDb: 0, attenuationAutomatic:false, preamplifier: 'auto', gainStrategy: 'low-noise', amplitudeOffsetDb: 0,
-  ifAgc: true, ifAgcTargetDbfs: -9, ifAgcPeriodMs: 250, ifAgcGainDb: 0,
-  rbwMode: 'auto', rbwHz: 60.306e3, resolutionTradeoffIndex:7,resolutionTradeoffState:'auto',vbwMode: 'ratio-10', vbwHz: 603.061e3,
-  sweepTimeMode: 'fast', window: 'blackman-nuttall', detector: 'positive-peak',
+  ifAgc: true, ifAgcTargetDbfs: -9, ifAgcPeriodS: 0, ifAgcGainDb: null,
+  rbwMode: 'auto', rbwHz: 60.306e3, resolutionTradeoffIndex:7,resolutionTradeoffState:'auto',vbwMode: 'ratio-0.1', vbwHz: 6.0306e3,
+  window: 'blackman-nuttall', detector: 'positive-peak',
   set: (key, value) => set({ [key]: value } as Partial<DeviceState>),
-  setSpan: (span) => set({ previousSpanHz: get().spanHz, spanHz: Math.max(1e5, Math.min(6e9, span)) }),
 }))
 
 interface DisplayState {

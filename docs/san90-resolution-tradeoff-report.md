@@ -130,4 +130,4 @@ python3 backend/tools/test_san90_stability.py --duration 600 --step-index 0 --tr
 
 GPU-backed browser validation used Firefox 130 through geckodriver on the physical display. The browser test is intentionally not part of the default automated suite because it requires a logged-in graphical session and exclusive SAN-90 ownership.
 
-POI remains nullable: no exact SDK POI field or verified formula has been identified. It is not inferred from trace rate, row duration, or display FPS. VBW, AGC, sweep-time, and hardware-span controls were deliberately left unchanged.
+POI remains nullable: no exact SDK POI field or verified formula has been identified. It is not inferred from trace rate, row duration, or display FPS. VBW and IF AGC were verified in later focused milestones; sweep-time and hardware-span controls remain deferred.

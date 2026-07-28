@@ -138,11 +138,16 @@ class AnalyzerSettings:
     rbw_hz: float | None = None
     rbw_mode: str = "auto"
     vbw_hz: float | None = None
+    vbw_mode: str = "ratio-0.1"
     reference_level_dbm: float = 0.0
     attenuation_db: int | None = None
     preamplifier: str | None = None
     gain_strategy: str | None = None
     if_agc_enabled: bool | None = None
+    if_agc_target_dbfs: float = -9.0
+    if_agc_period_s: float = 0.0
+    sweep_time_mode: str = "minimum"
+    sweep_time_multiple: float = 3.0
     sweep_time_s: float | None = None
     window: str | None = None
     detector: str | None = None
@@ -163,8 +168,17 @@ class AnalyzerActualSettings:
     attenuation_automatic: bool
     preamplifier: str | None
     gain_strategy: str | None
+    if_agc_enabled: bool | None
+    if_agc_target_dbfs: float | None
+    if_agc_period_s: float | None
+    if_agc_gain_db: float | None
     rbw_hz: float
     rbw_mode: str
+    vbw_hz: float | None
+    vbw_mode: str | None
+    sweep_time_mode: str | None
+    sweep_time_multiple: float | None
+    sweep_time_s: float | None
     window: str | None
     detector: str | None
     fft_size: int

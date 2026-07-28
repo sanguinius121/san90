@@ -3,5 +3,7 @@ dist/
 .vite/
 *.log
 .run/
+config/frequency-scan.json
+config/.frequency-scan.json.*.tmp
 __pycache__/
 *.py[cod]

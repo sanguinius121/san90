@@ -6,9 +6,10 @@ import {
   type CenterFrequencyUnit,
 } from './frequencyUnits'
 
-export const DEFAULT_SCAN_DURATION_SECONDS = 5
-export const MIN_SCAN_DURATION_SECONDS = 0.5
-export const SCAN_DURATION_STEP_SECONDS = 0.5
+export const DEFAULT_SCAN_DURATION_MS = 5_000
+export const MIN_SCAN_DURATION_MS = 500
+export const SCAN_DURATION_STEP_MS = 500
+export const DEFAULT_SCAN_STEP_HZ = 10e6
 
 export const DEFAULT_FREQUENCY_SCAN_ENTRIES = [
   {frequencyHz:400e6,frequencyUnit:'MHz'},
@@ -28,7 +29,10 @@ export interface FrequencyScanDraftEntry {
   frequencyHz:number
   frequencyUnit:CenterFrequencyUnit
   frequencyDraft:string
-  durationSeconds:number
+  stepHz:number
+  stepUnit:CenterFrequencyUnit
+  stepDraft:string
+  durationMs:number
   durationDraft:string
 }
 
@@ -40,6 +44,45 @@ export function frequencyDraftFromHz(hz:number, unit:CenterFrequencyUnit):string
   return formatScanNumber(hzToDisplayValue(hz, unit), centerFrequencyPrecision(unit))
 }
 
+export function scanEntryApiFromDraft(
+  entry:FrequencyScanDraftEntry,
+  minimumFrequencyHz:number,
+  maximumFrequencyHz:number,
+):FrequencyScanEntryApi|null {
+  const frequencyValue=Number(entry.frequencyDraft)
+  const frequencyHz=displayValueToHz(frequencyValue,entry.frequencyUnit)
+  const stepValue=Number(entry.stepDraft)
+  const stepHz=displayValueToHz(stepValue,entry.stepUnit)
+  const durationSeconds=Number(entry.durationDraft)
+  const durationMs=durationSeconds*1000
+  const maximumStepHz=maximumFrequencyHz-minimumFrequencyHz
+  if(
+    !entry.frequencyDraft.trim()||
+    !Number.isFinite(frequencyHz)||
+    frequencyHz<=0||
+    frequencyHz<minimumFrequencyHz||
+    frequencyHz>maximumFrequencyHz||
+    !entry.stepDraft.trim()||
+    !Number.isFinite(stepHz)||
+    stepHz<=0||
+    stepHz>maximumStepHz||
+    !entry.durationDraft.trim()||
+    !Number.isFinite(durationMs)||
+    !Number.isInteger(durationMs)||
+    durationMs<MIN_SCAN_DURATION_MS
+  )return null
+  return {
+    id:entry.id,
+    enabled:entry.enabled,
+    center_frequency_hz:frequencyHz,
+    duration_ms:durationMs,
+    duration_seconds:durationMs/1000,
+    step_hz:stepHz,
+    display_unit:entry.frequencyUnit,
+    step_unit:entry.stepUnit,
+  }
+}
+
 export function validateFrequencyScanDrafts(
   entries:FrequencyScanDraftEntry[],
   minimumFrequencyHz:number,
@@ -47,34 +90,9 @@ export function validateFrequencyScanDrafts(
 ):FrequencyScanEntryApi[] | null {
   const result:FrequencyScanEntryApi[]=[]
   for(const entry of entries){
-    const frequencyValue=Number(entry.frequencyDraft)
-    const draftFrequencyHz=displayValueToHz(frequencyValue,entry.frequencyUnit)
-    const draftDurationSeconds=Number(entry.durationDraft)
-    const frequencyDraftValid=Boolean(entry.frequencyDraft.trim())&&
-      Number.isFinite(draftFrequencyHz)&&
-      draftFrequencyHz>0&&
-      draftFrequencyHz>=minimumFrequencyHz&&
-      draftFrequencyHz<=maximumFrequencyHz
-    const durationDraftValid=Boolean(entry.durationDraft.trim())&&
-      Number.isFinite(draftDurationSeconds)&&
-      draftDurationSeconds>=MIN_SCAN_DURATION_SECONDS
-    if(entry.enabled&&(!frequencyDraftValid||!durationDraftValid))return null
-    const frequencyHz=frequencyDraftValid?draftFrequencyHz:entry.frequencyHz
-    const durationSeconds=durationDraftValid?draftDurationSeconds:entry.durationSeconds
-    if(
-      !Number.isFinite(frequencyHz)||
-      frequencyHz<=0||
-      frequencyHz<minimumFrequencyHz||
-      frequencyHz>maximumFrequencyHz||
-      !Number.isFinite(durationSeconds)||
-      durationSeconds<MIN_SCAN_DURATION_SECONDS
-    )return null
-    result.push({
-      id:entry.id,
-      enabled:entry.enabled,
-      center_frequency_hz:frequencyHz,
-      duration_seconds:durationSeconds,
-    })
+    const validated=scanEntryApiFromDraft(entry,minimumFrequencyHz,maximumFrequencyHz)
+    if(!validated)return null
+    result.push(validated)
   }
   return result
 }

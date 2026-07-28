@@ -34,7 +34,11 @@ from backend.analyzer.tradeoff import (
     visible_rows,
 )
 from backend.ai_detection import AiDetectionSubscriber
-from backend.frequency_scan import FrequencyScanController, FrequencyScanEntry
+from backend.frequency_scan import (
+    FREQUENCY_SCAN_CONFIG_PATH,
+    FrequencyScanController,
+    FrequencyScanEntry,
+)
 
 from .protocol import MESSAGE_AI_DETECTIONS, MESSAGE_SPECTRUM, MESSAGE_SPECTRUM_TEMPORAL, MESSAGE_STATUS, MESSAGE_WATERFALL, pack_ai_detections, pack_spectrum, pack_spectrum_temporal, pack_status, pack_waterfall, pack_waterfall_batch
 
@@ -83,7 +87,12 @@ class ClientMailbox:
 
 
 class AnalyzerService:
-    def __init__(self, source_name: str | None = None) -> None:
+    def __init__(
+        self,
+        source_name: str | None = None,
+        *,
+        frequency_scan_config_path: str | os.PathLike[str] | None = FREQUENCY_SCAN_CONFIG_PATH,
+    ) -> None:
         self.source_name = (source_name or os.getenv("ANALYZER_SOURCE", "simulator")).lower()
         self.source: AnalyzerSource | None = None
         spectrum_text = os.getenv("SAN90_SPECTRUM_FPS")
@@ -141,6 +150,7 @@ class AnalyzerService:
             self._apply_frequency_scan_tune,
             self._frequency_scan_available,
             self._publish_status,
+            config_path=frequency_scan_config_path,
         )
 
     async def start(self) -> None:
@@ -162,6 +172,11 @@ class AnalyzerService:
                 await asyncio.to_thread(self.source.apply_settings, settings)
         if isinstance(self.source, SimulatorSource):
             self._configure_simulator_waterfall(self.source)
+        minimum_hz, maximum_hz = self._frequency_scan_limits()
+        self.frequency_scan.load_configuration(
+            minimum_frequency_hz=minimum_hz,
+            maximum_frequency_hz=maximum_hz,
+        )
         await asyncio.to_thread(self.source.start)
         self._sync_waterfall_config(self.source)
         self.running = True
@@ -285,6 +300,13 @@ class AnalyzerService:
             "rbw_mode": None if settings_state is None else settings_state.actual.rbw_mode,
             "requested_rbw_hz": None if settings_state is None else settings_state.requested.rbw_hz,
             "actual_rbw_hz": None if settings_state is None else settings_state.actual.rbw_hz,
+            "vbw_mode": None if settings_state is None else settings_state.actual.vbw_mode,
+            "requested_vbw_hz": None if settings_state is None else settings_state.requested.vbw_hz,
+            "actual_vbw_hz": None if settings_state is None else settings_state.actual.vbw_hz,
+            "sweep_time_mode": None if settings_state is None else settings_state.actual.sweep_time_mode,
+            "requested_sweep_time_multiple": None if settings_state is None else settings_state.requested.sweep_time_multiple,
+            "requested_sweep_time_s": None if settings_state is None else settings_state.requested.sweep_time_s,
+            "actual_sweep_time_s": None if settings_state is None else settings_state.actual.sweep_time_s,
             "fft_size": None if settings_state is None else settings_state.actual.fft_size,
             "frequency_bin_spacing_hz": None if settings_state is None else settings_state.actual.frequency_bin_spacing_hz,
             "measured_profile_trace_rate_hz": None if actual_step is None else actual_step.measured_trace_rate_hz,

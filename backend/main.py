@@ -20,7 +20,18 @@ from backend.analyzer.amplitude_correction import validate_amplitude_offset
 from backend.analyzer.errors import ControlError, ControlErrorCode
 from backend.hardware.rf_switch import RfSwitchManager
 from backend.hardware.rf_switch.errors import RfSwitchError
-from backend.frequency_scan import FrequencyScanEntry, MIN_SCAN_DWELL_SECONDS
+from backend.frequency_scan import FrequencyScanEntry, MIN_SCAN_DURATION_MS
+from backend.analyzer.if_agc import (
+    IF_AGC_PERIOD_MAX_S,
+    IF_AGC_PERIOD_MIN_S,
+    IF_AGC_TARGET_MAX_DBFS,
+    IF_AGC_TARGET_MIN_DBFS,
+)
+from backend.analyzer.vbw import (
+    VBW_MANUAL_REQUEST_MAX_HZ,
+    VBW_MANUAL_REQUEST_MIN_HZ,
+    VBW_MODE_VALUES,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 service = AnalyzerService()
@@ -65,7 +76,10 @@ class FrequencyScanEntryRequest(BaseModel):
     id: str
     enabled: bool
     center_frequency_hz: float
-    duration_seconds: float
+    duration_ms: int
+    step_hz: float
+    display_unit: Literal["MHz", "GHz"]
+    step_unit: Literal["MHz", "GHz"]
 
     @field_validator("center_frequency_hz")
     @classmethod
@@ -74,11 +88,18 @@ class FrequencyScanEntryRequest(BaseModel):
             raise ValueError("center_frequency_hz must be finite and positive")
         return value
 
-    @field_validator("duration_seconds")
+    @field_validator("duration_ms")
     @classmethod
-    def valid_scan_duration(cls, value: float) -> float:
-        if not math.isfinite(value) or value < MIN_SCAN_DWELL_SECONDS:
-            raise ValueError(f"duration_seconds must be at least {MIN_SCAN_DWELL_SECONDS}")
+    def valid_scan_duration(cls, value: int) -> int:
+        if value < MIN_SCAN_DURATION_MS:
+            raise ValueError(f"duration_ms must be at least {MIN_SCAN_DURATION_MS}")
+        return value
+
+    @field_validator("step_hz")
+    @classmethod
+    def valid_scan_step(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("step_hz must be finite and positive")
         return value
 
 
@@ -106,6 +127,36 @@ class AmplitudeOffsetRequest(BaseModel):
         return validate_amplitude_offset(value)
 
 
+class IfAgcEnabledRequest(BaseModel):
+    enabled: bool
+
+
+class IfAgcTargetRequest(BaseModel):
+    target_dbfs: float
+
+    @field_validator("target_dbfs")
+    @classmethod
+    def valid_target(cls, value: float) -> float:
+        if not math.isfinite(value) or not IF_AGC_TARGET_MIN_DBFS <= value <= IF_AGC_TARGET_MAX_DBFS:
+            raise ValueError(
+                f"target_dbfs must be between {IF_AGC_TARGET_MIN_DBFS} and {IF_AGC_TARGET_MAX_DBFS}"
+            )
+        return value
+
+
+class IfAgcPeriodRequest(BaseModel):
+    period_s: float
+
+    @field_validator("period_s")
+    @classmethod
+    def valid_period(cls, value: float) -> float:
+        if not math.isfinite(value) or not IF_AGC_PERIOD_MIN_S <= value <= IF_AGC_PERIOD_MAX_S:
+            raise ValueError(
+                f"period_s must be between {IF_AGC_PERIOD_MIN_S} and {IF_AGC_PERIOD_MAX_S}"
+            )
+        return value
+
+
 class AttenuationRequest(BaseModel):
     attenuation_db: int | None = None
     mode: Literal["auto", "manual"] = "manual"
@@ -131,6 +182,32 @@ class RbwRequest(BaseModel):
     def valid_rbw(cls, value: float | None) -> float | None:
         if value is not None and (not math.isfinite(value) or value <= 0):
             raise ValueError("rbw_hz must be finite and positive")
+        return value
+
+
+class VbwRequest(BaseModel):
+    mode: str
+    vbw_hz: float | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def valid_mode(cls, value: str) -> str:
+        if value not in VBW_MODE_VALUES:
+            raise ValueError(f"unsupported VBW mode {value!r}")
+        return value
+
+    @field_validator("vbw_hz")
+    @classmethod
+    def valid_vbw(cls, value: float | None) -> float | None:
+        if value is not None and (
+            not math.isfinite(value)
+            or value < VBW_MANUAL_REQUEST_MIN_HZ
+            or value > VBW_MANUAL_REQUEST_MAX_HZ
+        ):
+            raise ValueError(
+                f"vbw_hz must be between {VBW_MANUAL_REQUEST_MIN_HZ} and "
+                f"{VBW_MANUAL_REQUEST_MAX_HZ} Hz"
+            )
         return value
 
 
@@ -275,7 +352,10 @@ async def frequency_scan_config(request: FrequencyScanConfigRequest) -> dict[str
             id=entry.id,
             enabled=entry.enabled,
             center_frequency_hz=entry.center_frequency_hz,
-            duration_seconds=entry.duration_seconds,
+            duration_ms=entry.duration_ms,
+            step_hz=entry.step_hz,
+            display_unit=entry.display_unit,
+            step_unit=entry.step_unit,
         )
         for entry in request.entries
     ])
@@ -299,6 +379,21 @@ async def reference_level(request: ReferenceLevelRequest) -> dict[str, object]:
 @app.put("/api/analyzer/amplitude/offset")
 async def amplitude_offset(request: AmplitudeOffsetRequest) -> dict[str, object]:
     return await service.apply_amplitude_offset(request.amplitude_offset_db)
+
+
+@app.put("/api/analyzer/amplitude/if-agc")
+async def if_agc_enabled(request: IfAgcEnabledRequest) -> dict[str, object]:
+    return await service.apply_control(if_agc_enabled=request.enabled)
+
+
+@app.put("/api/analyzer/amplitude/if-agc/target")
+async def if_agc_target(request: IfAgcTargetRequest) -> dict[str, object]:
+    return await service.apply_control(if_agc_target_dbfs=request.target_dbfs)
+
+
+@app.put("/api/analyzer/amplitude/if-agc/period")
+async def if_agc_period(request: IfAgcPeriodRequest) -> dict[str, object]:
+    return await service.apply_control(if_agc_period_s=request.period_s)
 
 
 @app.put("/api/analyzer/amplitude/attenuation")
@@ -328,6 +423,22 @@ async def rbw(request: RbwRequest) -> dict[str, object]:
     if mode == "manual" and request.rbw_hz is None:
         raise ControlError(ControlErrorCode.UNSUPPORTED_RBW, "manual RBW mode requires rbw_hz", recoverable=True)
     return await service.apply_control(rbw_mode=mode, rbw_hz=request.rbw_hz if mode == "manual" else None)
+
+
+@app.put("/api/analyzer/bandwidth/vbw")
+async def vbw(request: VbwRequest) -> dict[str, object]:
+    supported = service.capabilities_payload()["enum_values"].get("vbw_mode", ())
+    if request.mode not in supported:
+        raise ControlError(
+            ControlErrorCode.UNSUPPORTED_SETTING,
+            f"Unsupported VBW mode {request.mode!r}",
+            requested_value=request.mode,
+            recoverable=True,
+        )
+    changes: dict[str, object] = {"vbw_mode": request.mode}
+    if request.vbw_hz is not None:
+        changes["vbw_hz"] = request.vbw_hz
+    return await service.apply_control(**changes)
 
 
 @app.put("/api/analyzer/resolution-tradeoff")

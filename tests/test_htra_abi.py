@@ -46,7 +46,14 @@ int main(void) {
   SIZE(RTA_FrameInfo_TypeDef);
   SIZE(RTA_PlotInfo_TypeDef);
   printf("RTA_Profile.EnableIFAGC=%zu\n", offsetof(RTA_Profile_TypeDef, EnableIFAGC));
+  printf("RTA_Profile.VBW_Hz=%zu\n", offsetof(RTA_Profile_TypeDef, VBW_Hz));
+  printf("RTA_Profile.VBWMode=%zu\n", offsetof(RTA_Profile_TypeDef, VBWMode));
+  printf("RTA_Profile.SweepTimeMode=%zu\n", offsetof(RTA_Profile_TypeDef, SweepTimeMode));
+  printf("RTA_Profile.SweepTime=%zu\n", offsetof(RTA_Profile_TypeDef, SweepTime));
   printf("RTA_Profile.DCCancelerMode=%zu\n", offsetof(RTA_Profile_TypeDef, DCCancelerMode));
+  printf("RTA_FrameInfo.PacketAcqTime=%zu\n", offsetof(RTA_FrameInfo_TypeDef, PacketAcqTime));
+  printf("RTA_FrameInfo.PacketFrame=%zu\n", offsetof(RTA_FrameInfo_TypeDef, PacketFrame));
+  printf("MeasAux.IFAGCGain=%zu\n", offsetof(MeasAuxInfo_TypeDef, IFAGCGain));
   printf("MeasAux.nsSinceEpoch=%zu\n", offsetof(MeasAuxInfo_TypeDef, nsSinceEpoch));
   return 0;
 }
@@ -75,7 +82,14 @@ int main(void) {
             "RTA_FrameInfo_TypeDef": ct.sizeof(RtaFrameInfo),
             "RTA_PlotInfo_TypeDef": ct.sizeof(RtaPlotInfo),
             "RTA_Profile.EnableIFAGC": RtaProfile.EnableIFAGC.offset,
+            "RTA_Profile.VBW_Hz": RtaProfile.VBW_Hz.offset,
+            "RTA_Profile.VBWMode": RtaProfile.VBWMode.offset,
+            "RTA_Profile.SweepTimeMode": RtaProfile.SweepTimeMode.offset,
+            "RTA_Profile.SweepTime": RtaProfile.SweepTime.offset,
             "RTA_Profile.DCCancelerMode": RtaProfile.DCCancelerMode.offset,
+            "RTA_FrameInfo.PacketAcqTime": RtaFrameInfo.PacketAcqTime.offset,
+            "RTA_FrameInfo.PacketFrame": RtaFrameInfo.PacketFrame.offset,
+            "MeasAux.IFAGCGain": MeasAuxInfo.IFAGCGain.offset,
             "MeasAux.nsSinceEpoch": MeasAuxInfo.nsSinceEpoch.offset,
         }
         self.assertEqual({key: int(value) for key, value in actual.items()}, expected)

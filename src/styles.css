@@ -583,12 +583,13 @@ button {
   font-size: var(--ui-font-8);
   cursor: pointer;
 }
-.frequency-scan-entry__fields {
+.frequency-scan-entry__frequency-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 70px;
+  grid-template-columns: minmax(0, 1fr) 28px 28px;
   gap: 4px;
 }
 .frequency-scan-frequency,
+.frequency-scan-step,
 .frequency-scan-duration {
   height: 27px;
   display: flex;
@@ -610,7 +611,8 @@ button {
 .frequency-scan-entry input[type="number"]::-webkit-inner-spin-button {
   appearance: none;
 }
-.frequency-scan-frequency select {
+.frequency-scan-frequency select,
+.frequency-scan-step select {
   flex: 0 0 49px;
   width: 49px;
   height: 25px;
@@ -620,6 +622,30 @@ button {
   background-color: transparent;
   color: #5fcde8;
   font: var(--ui-font-8) "IBM Plex Mono";
+}
+.frequency-scan-step-button {
+  height: 27px;
+  padding: 0;
+  border: 1px solid #485964;
+  background: #25313a;
+  color: #63d7f1;
+  font: 600 var(--ui-font-11) "IBM Plex Mono";
+  cursor: pointer;
+}
+.frequency-scan-entry__detail-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto 58px;
+  align-items: center;
+  gap: 4px;
+  color: #91a3ae;
+  font: var(--ui-font-8) "IBM Plex Mono";
+}
+.frequency-scan-step {
+  min-width: 0;
+}
+.frequency-scan-step select {
+  flex: 0 0 46px;
+  width: 46px;
 }
 .frequency-scan-duration {
   padding: 0 5px;

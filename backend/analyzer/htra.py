@@ -269,6 +269,12 @@ class HtraApi:
             ct.POINTER(ct.c_uint8),
         ]
         self.lib.Device_GetAmpAttenState.restype = None
+        self.lib.Device_InitIFAGC.argtypes = [device_ref]
+        self.lib.Device_InitIFAGC.restype = ct.c_int
+        self.lib.Device_SetIFAGCTarget.argtypes = [device_ref, ct.POINTER(ct.c_double)]
+        self.lib.Device_SetIFAGCTarget.restype = ct.c_int
+        self.lib.Device_SetIFAGCPeriod.argtypes = [device_ref, ct.POINTER(ct.c_double)]
+        self.lib.Device_SetIFAGCPeriod.restype = ct.c_int
         self.lib.RTA_ProfileDeInit.argtypes = [device_ref, ct.POINTER(RtaProfile)]
         self.lib.RTA_ProfileDeInit.restype = ct.c_int
         self.lib.RTA_Configuration.argtypes = [

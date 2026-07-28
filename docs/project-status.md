@@ -1,6 +1,6 @@
 # SAN-90 Spectrum Console — project status and handoff
 
-Last updated: 2026-07-25
+Last updated: 2026-07-28
 
 Repository: `/home/tuancoi/san90`  
 Snapshot commit: `dc63492c9876708e5b726d8ed60d41197a0c61ab`
@@ -48,7 +48,7 @@ The following major features are implemented:
   and max-preserving vertical downsampling.
 - Shared plot geometry so spectrum and spectrogram frequency axes align.
 - Center frequency, reference level, attenuation, preamplifier, gain strategy,
-  RBW, resolution trade-off, RTA window, and detector controls.
+  IF AGC, RBW, VBW, resolution trade-off, RTA window, and detector controls.
 - Software amplitude offset applied exactly once to all dBm consumers.
 - Recoverable IF-overflow warning.
 - FT232H RF-path selection with fail-safe RF8 initialization and reconnect.
@@ -88,6 +88,7 @@ The verified conservative startup profile is:
 - preamplifier: off;
 - gain strategy: low-noise;
 - RBW: automatic;
+- VBW: 0.1 × RBW;
 - window: Blackman–Nuttall;
 - detector: positive peak.
 
@@ -147,9 +148,22 @@ while still max-holding every native trace. See
   the backend request remain in Hz.
 - The collapsible Frequency Scan control keeps independent entry drafts,
   initializes 400 MHz, 900 MHz, 2.44 GHz, 3.3 GHz, 5 GHz, and 5775 MHz with
-  five-second dwell times,
-  supports GHz/MHz display units, and disables manual center-frequency commits
-  while the backend scan controller owns tuning.
+  five-second dwell times and independent 10 MHz steps, supports GHz/MHz
+  display units for both center and step, and disables manual center-frequency
+  commits while the backend scan controller owns tuning.
+- Frequency Scan entry configuration is stored as schema-versioned JSON at
+  `config/frequency-scan.json` using same-directory temporary files, fsync, and
+  atomic replacement. Entry order, stable IDs, enabled state, canonical Hz
+  values, duration milliseconds, and unit preferences survive restart; scan
+  runtime state is never persisted and startup is always idle.
+- Scan-entry changes are accepted while scanning without interrupting the
+  active dwell. The controller reads the latest configuration between entries;
+  deleting or disabling every entry safely returns the loop to idle after the
+  current dwell.
+- The analyzer span remains hardware/readback-driven at approximately
+  101.5625 MHz. The former user-adjustable Span sidebar section was removed so
+  the fixed acquisition width remains consistent with AI image generation and
+  detector frequency mapping.
 - Spectrum and spectrogram WebGL resources remain mounted across scan
   center-frequency and configuration-generation changes. Verified frame
   bounds update the shared frequency axes in place, and spectrogram generation
@@ -169,6 +183,26 @@ while still max-holding every native trace. See
 - Amplitude offset is software-only, ranges from -100 to +100 dB in 1 dB
   increments, does not restart acquisition, and is included in status,
   waterfall mapping, spectrum values, statistics, and AI images.
+- IF AGC enable uses `RTA_Profile_TypeDef.EnableIFAGC`; target and period use
+  the SDK's in/out `double *` setters. The UI exposes One-shot (`-1 s`),
+  Dynamic (`0 s`), and Periodic (positive seconds) without hiding the native
+  values. Runtime gain comes from `MeasAuxInfo_TypeDef.IFAGCGain`, is sampled
+  at 10 Hz, and is never user-settable.
+- A short SAN-90 run on 2026-07-28 verified enable Off/On, targets `-3`, `-9`,
+  `-20`, and `-9.5 dBFS`, and periods `-1`, `0`, `0.25`, `1`, and `2 s`
+  without SDK errors or acquisition failure. All setter in/out values and
+  profile enable readbacks matched exactly. Under the safe input condition,
+  runtime gain remained `0 dB` and IF overflow remained false; gain movement
+  and overflow mitigation near saturation remain unverified.
+- VBW exposes only RBW and 0.1× RBW, defaulting to 0.1×. Manual, 0.01× RBW,
+  and 10× RBW remain documented native SDK modes but are intentionally omitted
+  from application capabilities and rejected by the web API.
+- A short SAN-90 run on 2026-07-28 verified all five VBW modes under auto RBW
+  and two manual RBW profiles. Ratio values tracked actual RBW exactly. Manual
+  requests below actual RBW/1000 were raised to that floor, requests above
+  200 MHz were capped at 200 MHz, and continuous values such as 12,345.67 Hz
+  were preserved. Narrow VBW reduced native trace rate but did not alter point
+  count or produce acquisition errors/timeouts.
 
 ### IF overflow
 
@@ -188,11 +222,19 @@ SIMULATOR_IF_OVERFLOW=true npm run backend:start:simulator
 VITE_SIMULATOR_IF_OVERFLOW=true npm run frontend:start
 ```
 
+### Sweep Time policy
+
+Sweep Time is fixed to minimum (`Fast / auto`) and is not advertised by
+capabilities or exposed through REST/UI controls. The separate Sweep section
+was removed; Window function is now part of Bandwidth. Native mappings and
+measured behavior remain documented for diagnostics in
+`docs/san90-sweep-time.md`.
+
 ### Unsupported or deliberately deferred controls
 
-VBW, IF AGC, sweep-time, and user-facing hardware-span controls remain disabled
-until their SDK mappings are independently verified. Do not simulate successful
-hardware changes for unsupported fields.
+User-facing hardware-span control remains disabled until its SDK behavior is
+independently verified. Do not simulate successful hardware changes for
+unsupported fields.
 
 ## FT232H RF switch
 
@@ -498,8 +540,8 @@ These observations are transient and should be re-queried.
 2. Add a managed AI-service command and explicit detector health reporting.
 3. Remove or generation-scope the detector's legacy accumulated frequency
    ranges; the web strip already ignores them.
-4. Keep VBW, IF AGC, sweep-time, and hardware span deferred until SDK behavior
-   is measured rather than guessed.
+4. Keep hardware span deferred until SDK behavior is measured rather than
+   guessed; preserve the verified Sweep Time readback path.
 5. Revalidate FT232H reconnect on each target machine's USB permissions and
    udev configuration.
 
@@ -508,6 +550,8 @@ These observations are transient and should be re-queried.
 - `docs/san90-sdk-analysis.md` — SDK discovery and binding decision.
 - `docs/san90-acquisition-mode.md` — selected RTA acquisition workflow.
 - `docs/san90-control-mapping.md` — verified control mappings.
+- `docs/san90-if-agc.md` — IF AGC SDK mapping and short hardware acceptance.
+- `docs/san90-vbw.md` — VBW enum mapping, coercion, and hardware measurements.
 - `docs/san90-resolution-tradeoff-table.md` — measured eight-profile table.
 - `docs/san90-resolution-tradeoff-report.md` — trade-off implementation report.
 - `docs/realtime-binary-protocol.md` — browser streaming protocol.

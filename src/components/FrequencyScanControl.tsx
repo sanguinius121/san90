@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { analyzerApi, type FrequencyScanApi } from '../data/controlApi'
+import { analyzerApi, type FrequencyScanApi, type FrequencyScanEntryApi } from '../data/controlApi'
 import {
-  DEFAULT_SCAN_DURATION_SECONDS,
+  DEFAULT_SCAN_DURATION_MS,
   DEFAULT_FREQUENCY_SCAN_ENTRIES,
-  MIN_SCAN_DURATION_SECONDS,
-  SCAN_DURATION_STEP_SECONDS,
+  DEFAULT_SCAN_STEP_HZ,
+  MIN_SCAN_DURATION_MS,
+  SCAN_DURATION_STEP_MS,
   formatScanNumber,
   frequencyDraftFromHz,
+  scanEntryApiFromDraft,
   validateFrequencyScanDrafts,
   type FrequencyScanDraftEntry,
 } from '../data/frequencyScan'
@@ -24,13 +26,43 @@ function createEntry(
   frequencyUnit:CenterFrequencyUnit='GHz',
 ):FrequencyScanDraftEntry {
   return {
-    id:`frequency-scan-${++nextScanEntryId}`,
+    id:`frequency-scan-${Date.now()}-${++nextScanEntryId}`,
     enabled:true,
     frequencyHz,
     frequencyUnit,
     frequencyDraft:frequencyDraftFromHz(frequencyHz,frequencyUnit),
-    durationSeconds:DEFAULT_SCAN_DURATION_SECONDS,
-    durationDraft:String(DEFAULT_SCAN_DURATION_SECONDS),
+    stepHz:DEFAULT_SCAN_STEP_HZ,
+    stepUnit:'MHz',
+    stepDraft:'10',
+    durationMs:DEFAULT_SCAN_DURATION_MS,
+    durationDraft:formatScanNumber(DEFAULT_SCAN_DURATION_MS/1000,3),
+  }
+}
+
+function draftFromApi(entry:FrequencyScanEntryApi):FrequencyScanDraftEntry {
+  const legacy=entry as FrequencyScanEntryApi&{
+    duration_seconds?:number
+    display_unit?:CenterFrequencyUnit
+    step_hz?:number
+    step_unit?:CenterFrequencyUnit
+  }
+  const frequencyUnit=legacy.display_unit??'GHz'
+  const stepHz=legacy.step_hz??DEFAULT_SCAN_STEP_HZ
+  const stepUnit=legacy.step_unit??'MHz'
+  const durationMs=Number.isFinite(legacy.duration_ms)
+    ?legacy.duration_ms
+    :(legacy.duration_seconds??DEFAULT_SCAN_DURATION_MS/1000)*1000
+  return {
+    id:entry.id,
+    enabled:entry.enabled,
+    frequencyHz:entry.center_frequency_hz,
+    frequencyUnit,
+    frequencyDraft:frequencyDraftFromHz(entry.center_frequency_hz,frequencyUnit),
+    stepHz,
+    stepUnit,
+    stepDraft:frequencyDraftFromHz(stepHz,stepUnit),
+    durationMs,
+    durationDraft:formatScanNumber(durationMs/1000,3),
   }
 }
 
@@ -47,66 +79,25 @@ export function FrequencyScanControl({
 }:FrequencyScanControlProps) {
   const currentCenterHz=useDeviceStore((state)=>state.centerHz)
   const scan=useRuntimeStore((state)=>state.frequencyScan)
-  const analyzerReconfiguring=useRuntimeStore((state)=>state.reconfiguring)
   const [entries,setEntries]=useState<FrequencyScanDraftEntry[]>(()=>
-    DEFAULT_FREQUENCY_SCAN_ENTRIES.map(entry=>
-      createEntry(entry.frequencyHz,entry.frequencyUnit),
-    ),
+    DEFAULT_FREQUENCY_SCAN_ENTRIES.map(entry=>createEntry(entry.frequencyHz,entry.frequencyUnit)),
   )
+  const entriesRef=useRef(entries)
   const [requestPending,setRequestPending]=useState(false)
   const [error,setError]=useState<string|null>(null)
   const draftsTouched=useRef(false)
-  const locked=disabled||requestPending||scan.running||analyzerReconfiguring
+  const saveSequence=useRef(0)
+  const entryControlsDisabled=disabled||requestPending
 
-  useEffect(()=>{
-    let active=true
-    void analyzerApi.frequencyScanStatus().then(status=>{
-      if(!active||draftsTouched.current||!status.entries.length)return
-      setEntries(status.entries.map(entry=>({
-        id:entry.id,
-        enabled:entry.enabled,
-        frequencyHz:entry.center_frequency_hz,
-        frequencyUnit:'GHz',
-        frequencyDraft:frequencyDraftFromHz(entry.center_frequency_hz,'GHz'),
-        durationSeconds:entry.duration_seconds,
-        durationDraft:formatScanNumber(entry.duration_seconds,3),
-      })))
-    }).catch(()=>{/* Frequency scan may be unavailable on an older backend. */})
-    return()=>{active=false}
-  },[])
-
-  const update=(id:string,changes:Partial<FrequencyScanDraftEntry>)=>{
+  const setLocalEntries=(next:FrequencyScanDraftEntry[])=>{
+    entriesRef.current=next
+    setEntries(next)
+  }
+  const replaceEntry=(id:string,changes:Partial<FrequencyScanDraftEntry>)=>{
     draftsTouched.current=true
-    setEntries(current=>current.map(entry=>entry.id===id?{...entry,...changes}:entry))
-  }
-  const commitFrequency=(entry:FrequencyScanDraftEntry)=>{
-    const displayValue=Number(entry.frequencyDraft)
-    const frequencyHz=displayValueToHz(displayValue,entry.frequencyUnit)
-    if(!entry.frequencyDraft.trim()||!Number.isFinite(frequencyHz)||frequencyHz<=0||frequencyHz<minimumFrequencyHz||frequencyHz>maximumFrequencyHz){
-      setError('Each scan frequency must be within the analyzer frequency range.')
-      return
-    }
-    update(entry.id,{frequencyHz,frequencyDraft:frequencyDraftFromHz(frequencyHz,entry.frequencyUnit)})
-    setError(null)
-  }
-  const changeUnit=(entry:FrequencyScanDraftEntry,nextUnit:CenterFrequencyUnit)=>{
-    const parsed=Number(entry.frequencyDraft)
-    const sourceHz=entry.frequencyDraft.trim()&&Number.isFinite(parsed)
-      ?displayValueToHz(parsed,entry.frequencyUnit)
-      :entry.frequencyHz
-    update(entry.id,{
-      frequencyUnit:nextUnit,
-      frequencyDraft:frequencyDraftFromHz(sourceHz,nextUnit),
-    })
-  }
-  const commitDuration=(entry:FrequencyScanDraftEntry)=>{
-    const duration=Number(entry.durationDraft)
-    if(!entry.durationDraft.trim()||!Number.isFinite(duration)||duration<MIN_SCAN_DURATION_SECONDS){
-      setError(`Dwell duration must be at least ${MIN_SCAN_DURATION_SECONDS} seconds.`)
-      return
-    }
-    update(entry.id,{durationSeconds:duration,durationDraft:formatScanNumber(duration,3)})
-    setError(null)
+    const next=entriesRef.current.map(entry=>entry.id===id?{...entry,...changes}:entry)
+    setLocalEntries(next)
+    return next
   }
   const applyStatus=(status:FrequencyScanApi)=>{
     useRuntimeStore.getState().update({frequencyScan:{
@@ -121,24 +112,121 @@ export function FrequencyScanControl({
       last_error:status.last_error,
     }})
   }
+  const persistEntries=async(next:FrequencyScanDraftEntry[]):Promise<boolean>=>{
+    const config=validateFrequencyScanDrafts(next,minimumFrequencyHz,maximumFrequencyHz)
+    if(!config){
+      setError('Enter valid frequencies, positive steps, and dwell durations.')
+      return false
+    }
+    const sequence=++saveSequence.current
+    try{
+      const status=await analyzerApi.configureFrequencyScan(config)
+      if(sequence===saveSequence.current){
+        applyStatus(status)
+        setError(status.configuration_save_error)
+      }
+      return !status.configuration_save_error
+    }catch(requestError){
+      if(sequence===saveSequence.current){
+        setError(requestError instanceof Error?requestError.message:'Unable to save frequency scan')
+      }
+      return false
+    }
+  }
+  const normalizedChanges=(validated:FrequencyScanEntryApi):Partial<FrequencyScanDraftEntry>=>({
+    frequencyHz:validated.center_frequency_hz,
+    frequencyDraft:frequencyDraftFromHz(validated.center_frequency_hz,validated.display_unit),
+    stepHz:validated.step_hz,
+    stepDraft:frequencyDraftFromHz(validated.step_hz,validated.step_unit),
+    durationMs:validated.duration_ms,
+    durationDraft:formatScanNumber(validated.duration_ms/1000,3),
+  })
+  const commitEntry=(entry:FrequencyScanDraftEntry)=>{
+    const validated=scanEntryApiFromDraft(entry,minimumFrequencyHz,maximumFrequencyHz)
+    if(!validated){
+      setError('Frequency, step, or duration is outside the supported range.')
+      return
+    }
+    const next=replaceEntry(entry.id,normalizedChanges(validated))
+    setError(null)
+    void persistEntries(next)
+  }
+  const changeUnit=(entry:FrequencyScanDraftEntry,nextUnit:CenterFrequencyUnit)=>{
+    const parsed=Number(entry.frequencyDraft)
+    const sourceHz=entry.frequencyDraft.trim()&&Number.isFinite(parsed)
+      ?displayValueToHz(parsed,entry.frequencyUnit)
+      :entry.frequencyHz
+    if(!Number.isFinite(sourceHz)||sourceHz<minimumFrequencyHz||sourceHz>maximumFrequencyHz){
+      setError('Each scan frequency must be within the analyzer frequency range.')
+      return
+    }
+    const next=replaceEntry(entry.id,{
+      frequencyHz:sourceHz,
+      frequencyUnit:nextUnit,
+      frequencyDraft:frequencyDraftFromHz(sourceHz,nextUnit),
+    })
+    setError(null)
+    void persistEntries(next)
+  }
+  const changeStepUnit=(entry:FrequencyScanDraftEntry,nextUnit:CenterFrequencyUnit)=>{
+    const parsed=Number(entry.stepDraft)
+    const sourceHz=entry.stepDraft.trim()&&Number.isFinite(parsed)
+      ?displayValueToHz(parsed,entry.stepUnit)
+      :entry.stepHz
+    if(!Number.isFinite(sourceHz)||sourceHz<=0||sourceHz>maximumFrequencyHz-minimumFrequencyHz){
+      setError('Step must be positive and no larger than the supported tuning range.')
+      return
+    }
+    const next=replaceEntry(entry.id,{
+      stepHz:sourceHz,
+      stepUnit:nextUnit,
+      stepDraft:frequencyDraftFromHz(sourceHz,nextUnit),
+    })
+    setError(null)
+    void persistEntries(next)
+  }
+  const adjustFrequency=(entry:FrequencyScanDraftEntry,direction:-1|1)=>{
+    const validated=scanEntryApiFromDraft(entry,minimumFrequencyHz,maximumFrequencyHz)
+    if(!validated){
+      setError('Enter a valid frequency, step, and duration before applying the step.')
+      return
+    }
+    const frequencyHz=validated.center_frequency_hz+direction*validated.step_hz
+    if(frequencyHz<minimumFrequencyHz||frequencyHz>maximumFrequencyHz){
+      setError('The requested step would exceed the analyzer frequency range.')
+      return
+    }
+    const next=replaceEntry(entry.id,{
+      ...normalizedChanges(validated),
+      frequencyHz,
+      frequencyDraft:frequencyDraftFromHz(frequencyHz,entry.frequencyUnit),
+    })
+    setError(null)
+    void persistEntries(next)
+  }
+
+  useEffect(()=>{
+    let active=true
+    void analyzerApi.frequencyScanStatus().then(status=>{
+      if(!active||draftsTouched.current)return
+      setLocalEntries(status.entries.map(draftFromApi))
+      if(status.configuration_save_error)setError(status.configuration_save_error)
+      else if(status.configuration_load_warning)setError(status.configuration_load_warning)
+    }).catch(()=>{/* Frequency scan may be unavailable on an older backend. */})
+    return()=>{active=false}
+  },[])
+
   const start=async()=>{
-    const config=validateFrequencyScanDrafts(entries,minimumFrequencyHz,maximumFrequencyHz)
+    const config=validateFrequencyScanDrafts(entriesRef.current,minimumFrequencyHz,maximumFrequencyHz)
     if(!config||!config.length||!config.some(entry=>entry.enabled)){
-      setError('Enable at least one valid frequency and enter valid dwell durations.')
+      setError('Enable at least one valid frequency and enter valid steps and dwell durations.')
       return
     }
     setRequestPending(true)
     setError(null)
     try{
-      setEntries(current=>current.map(entry=>{
-        const configured=config.find(candidate=>candidate.id===entry.id)
-        return configured?{
-          ...entry,
-          frequencyHz:configured.center_frequency_hz,
-          durationSeconds:configured.duration_seconds,
-        }:entry
-      }))
-      await analyzerApi.configureFrequencyScan(config)
+      const configured=await analyzerApi.configureFrequencyScan(config)
+      if(configured.configuration_save_error)throw new Error(configured.configuration_save_error)
       applyStatus(await analyzerApi.startFrequencyScan())
     }catch(requestError){
       setError(requestError instanceof Error?requestError.message:'Unable to start frequency scan')
@@ -166,30 +254,61 @@ export function FrequencyScanControl({
       {scan.remaining_dwell_seconds!=null&&<span>{scan.remaining_dwell_seconds.toFixed(1)} s</span>}
       {scan.state==='error'&&scan.last_error&&<span>{scan.last_error}</span>}
     </div>}
-    {entries.map((entry,index)=><div key={entry.id} className={`frequency-scan-entry ${scan.active_entry_id===entry.id?'is-active':''}`}>
-      <div className="frequency-scan-entry__heading">
-        <label><input type="checkbox" aria-label={`Scan ${index+1} enabled`} checked={entry.enabled} disabled={locked} onChange={event=>update(entry.id,{enabled:event.target.checked})}/><span>#{index+1}</span></label>
-        <button aria-label={`Delete scan ${index+1}`} disabled={locked} onClick={()=>{draftsTouched.current=true;setEntries(current=>current.filter(candidate=>candidate.id!==entry.id))}}>DELETE</button>
-      </div>
-      <div className="frequency-scan-entry__fields">
-        <div className="frequency-scan-frequency">
-          <input type="number" step="any" min="0" aria-label={`Scan ${index+1} center frequency`} inputMode="decimal" disabled={locked} value={entry.frequencyDraft} onChange={event=>update(entry.id,{frequencyDraft:event.target.value})} onBlur={()=>commitFrequency(entry)} onKeyDown={event=>{if(event.key==='Enter')commitFrequency(entry)}}/>
-          <select aria-label={`Scan ${index+1} frequency unit`} disabled={locked} value={entry.frequencyUnit} onChange={event=>changeUnit(entry,event.target.value as CenterFrequencyUnit)}>
-            {CENTER_FREQUENCY_UNITS.map(unit=><option key={unit} value={unit}>{unit}</option>)}
-          </select>
+    {entries.map((entry,index)=>{
+      const decrementDisabled=entry.frequencyHz-entry.stepHz<minimumFrequencyHz
+      const incrementDisabled=entry.frequencyHz+entry.stepHz>maximumFrequencyHz
+      return <div key={entry.id} className={`frequency-scan-entry ${scan.active_entry_id===entry.id?'is-active':''}`}>
+        <div className="frequency-scan-entry__heading">
+          <label><input type="checkbox" aria-label={`Scan ${index+1} enabled`} checked={entry.enabled} disabled={entryControlsDisabled} onChange={event=>{
+            const next=replaceEntry(entry.id,{enabled:event.target.checked})
+            void persistEntries(next)
+          }}/><span>#{index+1}</span></label>
+          <button aria-label={`Delete scan ${index+1}`} disabled={entryControlsDisabled} onClick={()=>{
+            draftsTouched.current=true
+            const next=entriesRef.current.filter(candidate=>candidate.id!==entry.id)
+            setLocalEntries(next)
+            void persistEntries(next)
+          }}>DELETE</button>
         </div>
-        <div className="frequency-scan-duration">
-          <input type="number" min={MIN_SCAN_DURATION_SECONDS} step={SCAN_DURATION_STEP_SECONDS} aria-label={`Scan ${index+1} duration`} inputMode="decimal" disabled={locked} value={entry.durationDraft} onChange={event=>update(entry.id,{durationDraft:event.target.value})} onBlur={()=>commitDuration(entry)} onKeyDown={event=>{if(event.key==='Enter')commitDuration(entry)}}/>
-          <em>s</em>
+        <div className="frequency-scan-entry__frequency-row">
+          <div className="frequency-scan-frequency">
+            <input type="number" step="any" min="0" aria-label={`Scan ${index+1} center frequency`} inputMode="decimal" disabled={entryControlsDisabled} value={entry.frequencyDraft} onChange={event=>replaceEntry(entry.id,{frequencyDraft:event.target.value})} onBlur={()=>commitEntry(entriesRef.current.find(candidate=>candidate.id===entry.id)??entry)} onKeyDown={event=>{if(event.key==='Enter')commitEntry(entriesRef.current.find(candidate=>candidate.id===entry.id)??entry)}}/>
+            <select aria-label={`Scan ${index+1} frequency unit`} disabled={entryControlsDisabled} value={entry.frequencyUnit} onChange={event=>changeUnit(entry,event.target.value as CenterFrequencyUnit)}>
+              {CENTER_FREQUENCY_UNITS.map(unit=><option key={unit} value={unit}>{unit}</option>)}
+            </select>
+          </div>
+          <button className="frequency-scan-step-button" aria-label={`Decrease scan ${index+1} frequency`} disabled={entryControlsDisabled||decrementDisabled} onClick={()=>adjustFrequency(entry,-1)}>−</button>
+          <button className="frequency-scan-step-button" aria-label={`Increase scan ${index+1} frequency`} disabled={entryControlsDisabled||incrementDisabled} onClick={()=>adjustFrequency(entry,1)}>+</button>
+        </div>
+        <div className="frequency-scan-entry__detail-row">
+          <label>Step</label>
+          <div className="frequency-scan-step">
+            <input type="number" step="any" min="0" aria-label={`Scan ${index+1} step`} inputMode="decimal" disabled={entryControlsDisabled} value={entry.stepDraft} onChange={event=>replaceEntry(entry.id,{stepDraft:event.target.value})} onBlur={()=>commitEntry(entriesRef.current.find(candidate=>candidate.id===entry.id)??entry)} onKeyDown={event=>{if(event.key==='Enter')commitEntry(entriesRef.current.find(candidate=>candidate.id===entry.id)??entry)}}/>
+            <select aria-label={`Scan ${index+1} step unit`} disabled={entryControlsDisabled} value={entry.stepUnit} onChange={event=>changeStepUnit(entry,event.target.value as CenterFrequencyUnit)}>
+              {CENTER_FREQUENCY_UNITS.map(unit=><option key={unit} value={unit}>{unit}</option>)}
+            </select>
+          </div>
+          <label>Duration</label>
+          <div className="frequency-scan-duration">
+            <input type="number" min={MIN_SCAN_DURATION_MS/1000} step={SCAN_DURATION_STEP_MS/1000} aria-label={`Scan ${index+1} duration`} inputMode="decimal" disabled={entryControlsDisabled} value={entry.durationDraft} onChange={event=>replaceEntry(entry.id,{durationDraft:event.target.value})} onBlur={()=>commitEntry(entriesRef.current.find(candidate=>candidate.id===entry.id)??entry)} onKeyDown={event=>{if(event.key==='Enter')commitEntry(entriesRef.current.find(candidate=>candidate.id===entry.id)??entry)}}/>
+            <em>s</em>
+          </div>
         </div>
       </div>
-    </div>)}
+    })}
     {error&&<div className="frequency-scan-error" role="alert">{error}</div>}
     <div className="frequency-scan-actions">
-      <button disabled={locked} onClick={()=>{draftsTouched.current=true;setEntries(current=>{let added=createEntry(currentCenterHz);while(current.some(entry=>entry.id===added.id))added=createEntry(currentCenterHz);return[...current,added]})}}>+ Add frequency</button>
-      <button disabled={locked} onClick={()=>void start()}>Start scan</button>
+      <button disabled={entryControlsDisabled} onClick={()=>{
+        draftsTouched.current=true
+        let added=createEntry(currentCenterHz)
+        while(entriesRef.current.some(entry=>entry.id===added.id))added=createEntry(currentCenterHz)
+        const next=[...entriesRef.current,added]
+        setLocalEntries(next)
+        void persistEntries(next)
+      }}>+ Add frequency</button>
+      <button disabled={disabled||requestPending||scan.running} onClick={()=>void start()}>Start scan</button>
       <button disabled={disabled||requestPending||!scan.running} onClick={()=>void stop()}>Stop scan</button>
     </div>
-    <span className="frequency-scan-constraints">Dwell ≥ {MIN_SCAN_DURATION_SECONDS}s · step {SCAN_DURATION_STEP_SECONDS}s</span>
+    <span className="frequency-scan-constraints">Dwell ≥ {MIN_SCAN_DURATION_MS/1000}s · default step 10 MHz</span>
   </div>
 }
