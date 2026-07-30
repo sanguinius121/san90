@@ -12,7 +12,7 @@ from .config import AiStreamConfig
 from .image_accumulator import AiImageAccumulator, CompletedImage
 from .metrics import AiStreamMetrics
 from .power_profiles import dbm_to_gray8
-from .preview import PreviewWriter
+from .preview import AiPreviewEncoder, LatestAiPreviewStore, PreviewWriter
 from .protocol import build_metadata, encode_metadata
 
 
@@ -32,6 +32,8 @@ class AiImagePublisher:
             config.preview_save_interval_seconds,
             config.preview_max_files,
         ) if config.preview_enabled else None
+        self.preview_store = LatestAiPreviewStore()
+        self.preview_encoder = AiPreviewEncoder(self.preview_store)
         self._last_error_log = 0.0
         self._last_clip_log = 0.0
         self._bound = False
@@ -42,6 +44,7 @@ class AiImagePublisher:
             return
         self._stop.clear()
         self._ready.clear()
+        self.preview_encoder.start()
         self._thread = threading.Thread(target=self._run, name="san90-ai-publisher", daemon=True)
         self._thread.start()
         self._ready.wait(timeout=1.0)
@@ -55,6 +58,7 @@ class AiImagePublisher:
                 logger.warning("AI publisher did not stop within %.1f seconds", timeout)
         self._thread = None
         self._bound = False
+        self.preview_encoder.stop()
 
     def _run(self) -> None:
         socket: Any = None
@@ -135,6 +139,10 @@ class AiImagePublisher:
             except zmq.Again:
                 self.metrics.increment("ai_images_dropped_send_total")
             self.metrics.update_latest(ai_send_time_ms=(time.perf_counter() - send_started) * 1000.0)
+            try:
+                self.preview_encoder.submit(image.buffer.gray8, image.capture)
+            except Exception as error:
+                self.metrics.update_latest(last_error=f"AI preview submit failed: {error}")
 
             if self._preview is not None:
                 saved, elapsed_ms = self._preview.maybe_save(image.buffer.gray8, metadata)
@@ -172,4 +180,5 @@ class AiImagePublisher:
         return self._last_sent_monotonic is not None and time.monotonic() - self._last_sent_monotonic < 2.0
 
     def latest_preview_png(self) -> bytes | None:
-        return None if self._preview is None else self._preview.latest_png()
+        snapshot = self.preview_store.snapshot()
+        return None if snapshot is None else snapshot.image

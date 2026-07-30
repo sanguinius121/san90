@@ -87,6 +87,8 @@ class AiImageAccumulator:
         buffer_pool_size: int,
         profile_provider: Callable[[], PowerProfile],
         metrics: AiStreamMetrics,
+        capture_callback: Callable[[CaptureMetadata], None] | None = None,
+        preview_context_provider: Callable[[], tuple[str, int | None, int | None]] | None = None,
     ) -> None:
         if not 7.0 <= target_images_per_second <= 10.0:
             raise ValueError("AI image target must be between 7 and 10 images/s")
@@ -94,6 +96,8 @@ class AiImageAccumulator:
         self._period_ns = round(1e9 / target_images_per_second)
         self._profile_provider = profile_provider
         self.metrics = metrics
+        self._capture_callback = capture_callback
+        self._preview_context_provider = preview_context_provider
         self.completed: queue.Queue[CompletedImage] = queue.Queue(maxsize=queue_size)
         self.free: queue.Queue[ImageBuffer] = queue.Queue(maxsize=buffer_pool_size)
         for identifier in range(buffer_pool_size):
@@ -150,6 +154,14 @@ class AiImageAccumulator:
             self._window_position = 0
             self._window_selected = False
             self._next_selected_start_ns = None
+
+    def reset_timeline(self, sequence_namespace: int = 0) -> None:
+        """Discard partial/queued images and namespace future image sequences."""
+        self.drain()
+        self._window_position = 0
+        self._window_selected = False
+        self._next_selected_start_ns = None
+        self._image_sequence = int(sequence_namespace) << 32
 
     def offer_packet(
         self,
@@ -214,6 +226,11 @@ class AiImageAccumulator:
                 if self._window_selected and self._active is not None and self._active_profile is not None:
                     last_sequence = packet_first_sequence + index - 1
                     last_timestamp = packet_first_capture_timestamp + (index - 1) * trace_timestamp_step_ns
+                    preview_source, playback_epoch, config_id = (
+                        self._preview_context_provider()
+                        if self._preview_context_provider is not None
+                        else ("hardware", None, None)
+                    )
                     capture = CaptureMetadata(
                         sequence=self._image_sequence,
                         first_trace_sequence=self._active_first_sequence,
@@ -226,8 +243,13 @@ class AiImageAccumulator:
                         frame_width_source=width,
                         configuration_generation=metadata.configuration_generation,
                         power_profile=self._active_profile,
+                        preview_source=preview_source,
+                        playback_epoch=playback_epoch,
+                        config_id=config_id,
                     )
                     self._image_sequence += 1
+                    if self._capture_callback is not None:
+                        self._capture_callback(capture)
                     self.metrics.increment("ai_images_created_total")
                     self._publish_nonblocking(CompletedImage(self._active, capture))
                 self._active = None

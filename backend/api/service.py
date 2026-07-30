@@ -39,6 +39,18 @@ from backend.frequency_scan import (
     FrequencyScanController,
     FrequencyScanEntry,
 )
+from backend.recording.config import (
+    DEFAULT_RECORDING_CONFIG_PATH,
+    RecordingConfigStore,
+    RecordingPreferences,
+)
+from backend.recording.models import RecorderState, RecordingMode, StopReason
+from backend.recording.recorder import RecordingConflictError, San90RtaRecorder
+from backend.playback.engine import PlaybackError
+from backend.playback.models import PlaybackState
+from backend.playback.service import PlaybackService
+from backend.playback.source import PlaybackSource
+from backend.playback.storage import RecordingCatalog
 
 from .protocol import MESSAGE_AI_DETECTIONS, MESSAGE_SPECTRUM, MESSAGE_SPECTRUM_TEMPORAL, MESSAGE_STATUS, MESSAGE_WATERFALL, pack_ai_detections, pack_spectrum, pack_spectrum_temporal, pack_status, pack_waterfall, pack_waterfall_batch
 
@@ -92,6 +104,8 @@ class AnalyzerService:
         source_name: str | None = None,
         *,
         frequency_scan_config_path: str | os.PathLike[str] | None = FREQUENCY_SCAN_CONFIG_PATH,
+        recording_config_path: str | os.PathLike[str] | None = DEFAULT_RECORDING_CONFIG_PATH,
+        recording_root: str | os.PathLike[str] | None = None,
     ) -> None:
         self.source_name = (source_name or os.getenv("ANALYZER_SOURCE", "simulator")).lower()
         self.source: AnalyzerSource | None = None
@@ -146,6 +160,23 @@ class AnalyzerService:
         self._last_log_waterfall_batches = 0
         self._last_process_cpu = time.process_time()
         self._control_lock = asyncio.Lock()
+        self._recording_lock = asyncio.Lock()
+        self.recorder = San90RtaRecorder()
+        self.recording_config = RecordingConfigStore(
+            path=recording_config_path,
+            recording_root=recording_root,
+        )
+        self.recording_config.load()
+        self.recording_config.resolve_output_directory(
+            self.recording_config.preferences.output_directory,
+            create=True,
+        )
+        recording_root_path = self.recording_config.recording_root.resolve(strict=True)
+        self.playback = PlaybackService(RecordingCatalog(recording_root_path))
+        self._playback_lock = asyncio.Lock()
+        self._playback_restore_ai_enabled: bool | None = None
+        self._playback_restore_error: str | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
         self.frequency_scan = FrequencyScanController(
             self._apply_frequency_scan_tune,
             self._frequency_scan_available,
@@ -156,6 +187,8 @@ class AnalyzerService:
     async def start(self) -> None:
         if self.running:
             return
+        self._event_loop = asyncio.get_running_loop()
+        self.playback.engine.set_epoch_callback(self._on_playback_epoch)
         if self.source is None:
             self.source = create_analyzer_source(self.source_name)
             await asyncio.to_thread(self.source.connect)
@@ -172,6 +205,8 @@ class AnalyzerService:
                 await asyncio.to_thread(self.source.apply_settings, settings)
         if isinstance(self.source, SimulatorSource):
             self._configure_simulator_waterfall(self.source)
+        if isinstance(self.source, (SimulatorSource, San90Source)):
+            self.source.set_recording_sink(self.recorder)
         minimum_hz, maximum_hz = self._frequency_scan_limits()
         self.frequency_scan.load_configuration(
             minimum_frequency_hz=minimum_hz,
@@ -193,6 +228,7 @@ class AnalyzerService:
     async def stop(self, *, disconnect: bool = False) -> None:
         if self.frequency_scan.running:
             await self.frequency_scan.stop(reason="Analyzer stopped during frequency scan")
+        await asyncio.to_thread(self.playback.engine.stop, timeout=2.0)
         self.running = False
         ai_task = self._ai_detection_task
         self._ai_detection_task = None
@@ -211,6 +247,12 @@ class AnalyzerService:
             except asyncio.CancelledError:
                 pass
         if self.source is not None:
+            if isinstance(self.source, (SimulatorSource, San90Source)):
+                self.source.set_recording_sink(None)
+            recorder_reason = (
+                StopReason.BACKEND_SHUTDOWN if disconnect else StopReason.DEVICE_DISCONNECT
+            )
+            await asyncio.to_thread(self.recorder.stop, recorder_reason, timeout=5.0)
             await asyncio.to_thread(self.source.stop)
             self._status_sequence += 1
             self.offer(MESSAGE_STATUS, pack_status(self.source_name, self._status_sequence, self.status_payload()))
@@ -240,10 +282,42 @@ class AnalyzerService:
             client.offer(message_type, message)
 
     def publish_ai_detection_result(self, result: dict[str, Any]) -> None:
+        if self.playback.engine.active:
+            accepted = self.playback.engine.source.accept_ai_result(result)
+            if accepted is None:
+                return
+            result = accepted
+        else:
+            result = {**result, "source": self.source_name}
         self._ai_detection_sequence += 1
         self.offer(
             MESSAGE_AI_DETECTIONS,
-            pack_ai_detections(self.source_name, self._ai_detection_sequence, result),
+            pack_ai_detections(
+                "san90" if self.playback.engine.active else self.source_name,
+                self._ai_detection_sequence,
+                result,
+            ),
+        )
+
+    def _on_playback_epoch(self, _: int, __: str) -> None:
+        self.playback.engine.source.clear_ai_preview("waiting")
+        loop = self._event_loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(self._clear_ai_detections)
+
+    def _clear_ai_detections(self) -> None:
+        self._ai_detection_sequence += 1
+        self.offer(
+            MESSAGE_AI_DETECTIONS,
+            pack_ai_detections(
+                "san90",
+                self._ai_detection_sequence,
+                {
+                    "detections": [],
+                    "timestamp_ns": time.time_ns(),
+                    "source": "playback" if self.playback.engine.active else self.source_name,
+                },
+            ),
         )
 
     def _publish_status(self) -> None:
@@ -260,9 +334,10 @@ class AnalyzerService:
             self.spectrum_bytes_sent += size
 
     def status_payload(self) -> dict[str, Any]:
-        status = self.source.get_status() if self.source is not None else RuntimeStatus(source=self.source_name)
-        diagnostics = self.source.get_diagnostics() if isinstance(self.source, San90Source) else None
-        reconfiguration = self.source.get_reconfiguration_metrics() if isinstance(self.source, San90Source) else None
+        display_source = self._display_source()
+        status = display_source.get_status() if display_source is not None else RuntimeStatus(source=self.source_name)
+        diagnostics = self.source.get_diagnostics() if isinstance(self.source, San90Source) and display_source is self.source else None
+        reconfiguration = self.source.get_reconfiguration_metrics() if isinstance(self.source, San90Source) and display_source is self.source else None
         now_ns = time.monotonic_ns()
         last_sdk_age_ms = None
         if diagnostics is not None and diagnostics.trace_frames_received and self.source is not None:
@@ -270,10 +345,10 @@ class AnalyzerService:
             if receipt_ns is not None:
                 last_sdk_age_ms = (now_ns - receipt_ns) / 1e6
         raw_mapping = self.source.latest_raw_amplitude_mapping() if isinstance(self.source, San90Source) else None
-        settings_state = self.source.get_settings_state() if self.source is not None else None
+        settings_state = display_source.get_settings_state() if display_source is not None else None
         actual_step = None
-        if self.source is not None and settings_state is not None:
-            capabilities = self.source.get_capabilities()
+        if display_source is not None and settings_state is not None:
+            capabilities = display_source.get_capabilities()
             actual_step = match_actual_tradeoff_step(
                 capabilities.resolution_tradeoff_steps,
                 actual_rbw_hz=settings_state.actual.rbw_hz,
@@ -283,7 +358,7 @@ class AnalyzerService:
             )
         return {
             **asdict(status),
-            "source": self.source_name,
+            "source": "playback" if isinstance(display_source, PlaybackSource) else self.source_name,
             "reconnect_count": self.device_reconnects,
             "spectrum_publish_fps": self.spectrum_fps,
             "spectrum_render_fps": 60.0,
@@ -337,12 +412,268 @@ class AnalyzerService:
             "reconfiguration": None if reconfiguration is None else asdict(reconfiguration) | {"mean_duration_s": reconfiguration.mean_duration_s},
             "ai_stream": self.ai_stream_status(),
             "waterfall_producer": self._waterfall_metrics_payload(),
-            "spectrum_temporal": self.source.get_spectrum_temporal_metrics() if isinstance(self.source, (San90Source, SimulatorSource)) else None,
+            "spectrum_temporal": display_source.get_spectrum_temporal_metrics() if isinstance(display_source, (San90Source, SimulatorSource, PlaybackSource)) else None,
             "frequency_scan": self.frequency_scan.status_payload(),
+            "recording": self.recording_status_payload(),
+            "playback": self.playback.status_payload(),
         }
 
+    def _display_source(self) -> AnalyzerSource | None:
+        state = self.playback.engine.status().state
+        if state in {
+            PlaybackState.READY,
+            PlaybackState.PLAYING,
+            PlaybackState.PAUSED,
+            PlaybackState.SEEKING,
+            PlaybackState.COMPLETED,
+        } or (state == PlaybackState.FAILED and self.playback.engine.source.has_config):
+            return self.playback.engine.source
+        return self.source
+
+    def recording_config_payload(self) -> dict[str, Any]:
+        preferences = self.recording_config.preferences
+        return {
+            **preferences.as_json(),
+            "recording_root": str(self.recording_config.recording_root),
+            "load_warning": self.recording_config.load_warning,
+            "save_error": self.recording_config.save_error,
+        }
+
+    def configure_recording(self, preferences: RecordingPreferences) -> dict[str, Any]:
+        if self.recorder.status().state in {
+            RecorderState.STARTING,
+            RecorderState.RECORDING,
+            RecorderState.STOPPING,
+            RecorderState.FINALIZING,
+        }:
+            raise RecordingConflictError("recording configuration cannot change while active")
+        self.recording_config.save(preferences)
+        return self.recording_config_payload()
+
+    def recording_directories_payload(self, *, created: str | None = None) -> dict[str, Any]:
+        directories = self.recording_config.list_output_directories()
+        return {
+            "root_name": self.recording_config.recording_root.name,
+            "directories": directories,
+            "created": created,
+        }
+
+    def create_recording_directory(self, relative_path: str) -> dict[str, Any]:
+        candidate = relative_path.strip()
+        if not candidate or candidate == ".":
+            raise ValueError("new recording directory must not be empty or the recording root")
+        preferences = self.recording_config.preferences
+        self.recording_config.validate(
+            RecordingPreferences(
+                mode=preferences.mode,
+                duration_s=preferences.duration_s,
+                file_size_limit_bytes=preferences.file_size_limit_bytes,
+                free_disk_reserve_bytes=preferences.free_disk_reserve_bytes,
+                output_directory=candidate,
+                file_prefix=preferences.file_prefix,
+            )
+        )
+        resolved = self.recording_config.resolve_output_directory(candidate, create=True)
+        root = self.recording_config.recording_root.resolve(strict=True)
+        created = resolved.relative_to(root).as_posix()
+        return self.recording_directories_payload(created=created)
+
+    async def start_recording(self) -> dict[str, Any]:
+        async with self._recording_lock:
+            if self.playback.engine.active:
+                raise RecordingConflictError("recording cannot start while playback is open")
+            source = self.source
+            if not self.running or source is None:
+                raise ControlError(
+                    ControlErrorCode.DEVICE_NOT_CONNECTED,
+                    "Analyzer source is unavailable for recording",
+                    recoverable=True,
+                )
+            source_status = source.get_status()
+            if not source_status.connected or not source_status.acquisition_running:
+                raise ControlError(
+                    ControlErrorCode.DEVICE_NOT_CONNECTED,
+                    "Analyzer acquisition must be connected and running before recording",
+                    recoverable=True,
+                )
+            device = source.get_device_info()
+            metadata = {
+                "device": {
+                    "manufacturer": "HAROGIC" if self.source_name == "san90" else None,
+                    "model": None if device is None else device.model,
+                    "uid": None if device is None else device.serial,
+                    "firmware_version": None if device is None else device.firmware_version,
+                    "api_version": None if device is None else device.sdk_version,
+                    "fpga_version": None if device is None else device.fpga_version,
+                },
+                "application": {"name": "san90", "version": None},
+                "host": {
+                    "hostname": os.uname().nodename,
+                    "platform": sys.platform,
+                    "architecture": os.uname().machine,
+                },
+                "initial_requested_configuration": asdict(source.get_settings_state().requested),
+            }
+            await asyncio.to_thread(
+                self.recorder.start,
+                self.recording_config.runtime_config(),
+                metadata,
+            )
+            return self.recording_status_payload()
+
+    async def stop_recording(self) -> dict[str, Any]:
+        async with self._recording_lock:
+            await asyncio.to_thread(
+                self.recorder.stop,
+                StopReason.USER_STOP,
+                timeout=0.25,
+            )
+            return self.recording_status_payload()
+
+    def recording_status_payload(self) -> dict[str, Any]:
+        snapshot = self.recorder.status()
+        payload = asdict(snapshot)
+        payload["state"] = snapshot.state.value
+        payload["mode"] = None if snapshot.mode is None else snapshot.mode.value
+        payload["stop_reason"] = (
+            None if snapshot.stop_reason is None else snapshot.stop_reason.name.lower()
+        )
+        payload["source"] = self.source_name
+        payload["queue_pressure"] = snapshot.queue_pressure
+        available = None
+        total = None
+        try:
+            directory = self.recording_config.resolve_output_directory(
+                self.recording_config.preferences.output_directory,
+                create=False,
+            )
+            stat = os.statvfs(directory)
+            available = stat.f_bavail * stat.f_frsize
+            total = stat.f_blocks * stat.f_frsize
+        except (OSError, ValueError):
+            pass
+        payload["available_disk_bytes"] = available
+        payload["total_disk_bytes"] = total
+        return payload
+
+    def recordings_payload(self) -> dict[str, object]:
+        return self.playback.recordings_payload()
+
+    def recording_metadata_payload(self, recording_id: str) -> dict[str, object]:
+        return self.playback.recording_payload(recording_id)
+
+    async def open_playback(self, recording_id: str) -> dict[str, object]:
+        async with self._playback_lock:
+            if self.recorder.status().state in {
+                RecorderState.STARTING,
+                RecorderState.RECORDING,
+                RecorderState.STOPPING,
+                RecorderState.FINALIZING,
+            }:
+                raise PlaybackError("playback cannot open while recording is active")
+            if self.frequency_scan.running:
+                await self.frequency_scan.stop(reason="Playback opened")
+            path = await asyncio.to_thread(self.playback.catalog.resolve, recording_id)
+            summary = await asyncio.to_thread(self.playback.catalog.get, recording_id)
+            if not summary.playable:
+                raise PlaybackError(summary.error or "recording is not playable")
+            previous_source = "hardware" if self.source_name == "san90" else self.source_name
+            self._playback_restore_error = None
+            if isinstance(self.source, (San90Source, SimulatorSource)):
+                ai_status = self.source.get_ai_stream_status()
+                self._playback_restore_ai_enabled = bool(ai_status.get("enabled", False))
+                if self._playback_restore_ai_enabled:
+                    await asyncio.to_thread(self.source.set_ai_stream_enabled, False)
+            try:
+                await asyncio.to_thread(
+                    self.playback.engine.open,
+                    path,
+                    recording_id=recording_id,
+                    filename=summary.filename,
+                    previous_source=previous_source,
+                )
+            except Exception:
+                await self._restore_ai_after_playback()
+                raise
+            self._clear_ai_detections()
+            self._publish_status()
+            return self.playback.status_payload()
+
+    async def play_playback(self) -> dict[str, object]:
+        async with self._playback_lock:
+            await asyncio.to_thread(self.playback.engine.play)
+            self._publish_status()
+            return self.playback.status_payload()
+
+    async def pause_playback(self) -> dict[str, object]:
+        async with self._playback_lock:
+            await asyncio.to_thread(self.playback.engine.pause)
+            self._publish_status()
+            return self.playback.status_payload()
+
+    async def stop_playback(self) -> dict[str, object]:
+        async with self._playback_lock:
+            await asyncio.to_thread(self.playback.engine.stop, timeout=2.0)
+            await self._restore_ai_after_playback()
+            self._publish_status()
+            return self.playback.status_payload()
+
+    async def seek_playback(self, position_s: float) -> dict[str, object]:
+        async with self._playback_lock:
+            await asyncio.to_thread(self.playback.engine.seek, position_s)
+            self._clear_ai_detections()
+            self._publish_status()
+            return self.playback.status_payload()
+
+    async def step_playback(self, direction: str) -> dict[str, object]:
+        async with self._playback_lock:
+            await asyncio.to_thread(self.playback.engine.step, direction)
+            self._clear_ai_detections()
+            self._publish_status()
+            return self.playback.status_payload()
+
+    async def configure_playback(self, *, auto_loop: bool, run_ai: bool) -> dict[str, object]:
+        async with self._playback_lock:
+            await asyncio.to_thread(
+                self.playback.engine.configure,
+                auto_loop=auto_loop,
+                run_ai=run_ai,
+            )
+            if not run_ai:
+                self._clear_ai_detections()
+            self._publish_status()
+            return self.playback.status_payload()
+
+    def playback_status_payload(self) -> dict[str, object]:
+        payload = self.playback.status_payload()
+        if self._playback_restore_error is not None:
+            payload["last_error"] = self._playback_restore_error
+        return payload
+
+    async def _restore_ai_after_playback(self) -> None:
+        restore = self._playback_restore_ai_enabled
+        self._playback_restore_ai_enabled = None
+        if restore and isinstance(self.source, (San90Source, SimulatorSource)):
+            try:
+                await asyncio.to_thread(self.source.set_ai_stream_enabled, True)
+            except Exception as error:
+                self._playback_restore_error = f"AI source restore failed: {error}"
+                logger.error(self._playback_restore_error)
+
     def ai_stream_status(self) -> dict[str, object]:
-        if isinstance(self.source, San90Source):
+        if self.playback.engine.active:
+            status = self.playback.engine.source.ai_status()
+            return {
+                **status,
+                "enabled": bool(status.get("run_ai", False)),
+                "supported": True,
+                "reason": (
+                    None
+                    if status.get("run_ai", False)
+                    else "Playback AI is disabled; hardware AI remains suppressed"
+                ),
+            }
+        if isinstance(self.source, (San90Source, SimulatorSource)):
             return self.source.get_ai_stream_status()
         return {
             "enabled": False,
@@ -351,7 +682,7 @@ class AnalyzerService:
         }
 
     async def set_ai_stream_enabled(self, enabled: bool) -> dict[str, object]:
-        if not isinstance(self.source, San90Source):
+        if not isinstance(self.source, (San90Source, SimulatorSource)):
             raise ControlError(
                 ControlErrorCode.UNSUPPORTED_SETTING,
                 "AI stream output requires the SAN-90 source",
@@ -360,7 +691,7 @@ class AnalyzerService:
         return await asyncio.to_thread(self.source.set_ai_stream_enabled, enabled)
 
     async def set_ai_power_profile(self, name: str) -> dict[str, object]:
-        if not isinstance(self.source, San90Source):
+        if not isinstance(self.source, (San90Source, SimulatorSource)):
             raise ControlError(
                 ControlErrorCode.UNSUPPORTED_SETTING,
                 "AI power profiles require the SAN-90 source",
@@ -378,20 +709,54 @@ class AnalyzerService:
             ) from error
 
     def latest_ai_preview_png(self) -> bytes | None:
-        return self.source.latest_ai_preview_png() if isinstance(self.source, San90Source) else None
+        status = self.ai_preview_status()
+        sequence = status.get("sequence")
+        snapshot = self.ai_preview_image(int(sequence)) if isinstance(sequence, int) else None
+        return None if snapshot is None else snapshot.image
+
+    def ai_preview_status(self, *, viewer: bool = False) -> dict[str, object]:
+        if self.playback.engine.active:
+            return self.playback.engine.source.ai_preview_status(viewer=viewer)
+        if isinstance(self.source, (San90Source, SimulatorSource)):
+            return self.source.ai_preview_status(viewer=viewer)
+        return {
+            "available": False,
+            "reason": "unsupported_source",
+            "sequence": None,
+            "source": self.source_name,
+            "playback_epoch": None,
+            "config_id": None,
+            "configuration_generation": None,
+            "center_frequency_hz": None,
+            "frequency_start_hz": None,
+            "frequency_stop_hz": None,
+            "width": 640,
+            "height": 640,
+            "created_at_ns": None,
+            "content_type": "image/png",
+        }
+
+    def ai_preview_image(self, sequence: int):
+        if self.playback.engine.active:
+            return self.playback.engine.source.ai_preview_image(sequence)
+        if isinstance(self.source, (San90Source, SimulatorSource)):
+            return self.source.ai_preview_image(sequence)
+        return None
 
     def capabilities_payload(self) -> dict[str, Any]:
-        if self.source is None:
+        source = self._display_source()
+        if source is None:
             raise ControlError(ControlErrorCode.DEVICE_NOT_CONNECTED, "Analyzer source is not initialized", recoverable=True)
-        capabilities = self.source.get_capabilities()
+        capabilities = source.get_capabilities()
         payload = asdict(capabilities)
         payload["supported_controls"] = sorted(capabilities.supported_controls)
         return payload
 
     def settings_payload(self) -> dict[str, Any]:
-        if self.source is None:
+        source = self._display_source()
+        if source is None:
             raise ControlError(ControlErrorCode.DEVICE_NOT_CONNECTED, "Analyzer source is not initialized", recoverable=True)
-        return asdict(self.source.get_settings_state())
+        return asdict(source.get_settings_state())
 
     def _frequency_scan_limits(self) -> tuple[float, float]:
         if self.source is None:
@@ -427,7 +792,7 @@ class AnalyzerService:
         return self.frequency_scan.payload()
 
     def _frequency_scan_available(self) -> bool:
-        if not self.running or self.source is None:
+        if not self.running or self.source is None or self.playback.engine.active:
             return False
         status = self.source.get_status()
         return status.connected and status.acquisition_running
@@ -437,6 +802,12 @@ class AnalyzerService:
         return float(state["actual"]["center_frequency_hz"])
 
     async def apply_control(self, *, _frequency_scan_owned: bool = False, **changes: object) -> dict[str, Any]:
+        if self.playback.engine.active:
+            raise ControlError(
+                ControlErrorCode.DEVICE_BUSY,
+                "Analyzer controls are unavailable while playback owns the display",
+                recoverable=True,
+            )
         if self.source is None:
             raise ControlError(ControlErrorCode.DEVICE_NOT_CONNECTED, "Analyzer source is not initialized", recoverable=True)
         if "center_frequency_hz" in changes and self.frequency_scan.running and not _frequency_scan_owned:
@@ -473,6 +844,12 @@ class AnalyzerService:
 
     async def apply_amplitude_offset(self, amplitude_offset_db: float) -> dict[str, Any]:
         """Apply application calibration without an SDK reconfiguration."""
+        if self.playback.engine.active:
+            raise ControlError(
+                ControlErrorCode.DEVICE_BUSY,
+                "Amplitude Offset is read-only during playback",
+                recoverable=True,
+            )
         if self.source is None:
             raise ControlError(
                 ControlErrorCode.DEVICE_NOT_CONNECTED,
@@ -600,7 +977,7 @@ class AnalyzerService:
         self.waterfall_rows_per_batch = config.rows_per_batch
 
     def _waterfall_metrics_payload(self) -> dict[str, Any] | None:
-        source = self.source
+        source = self._display_source()
         if isinstance(source, (SimulatorSource, San90Source)):
             metrics = source.get_waterfall_metrics()
             return None if metrics is None else asdict(metrics)
@@ -609,13 +986,15 @@ class AnalyzerService:
     async def _pump(self) -> None:
         next_status = time.monotonic()
         while self.running:
-            source = self.source
+            source = self._display_source()
             if source is None:
                 return
-            if isinstance(source, San90Source):
+            if isinstance(source, (San90Source, PlaybackSource)):
                 temporal = source.read_spectrum_temporal()
                 if temporal is not None:
                     serialization_started = time.perf_counter_ns()
+                    # Version-4 has no playback source code. Playback retains
+                    # the SAN-90 wire identity and is distinguished by status.
                     message = pack_spectrum_temporal("san90", temporal)
                     serialization_ns = time.perf_counter_ns() - serialization_started
                     self.spectrum_serializations += 1

@@ -7,8 +7,11 @@ import os
 import threading
 import time
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+from backend.recording.models import RecordingConfiguration, RecordingPacket
 
 from .amplitude_correction import (
     AMPLITUDE_OFFSET_MAX_DB,
@@ -54,16 +57,10 @@ from .sweep_time import (
     validate_sweep_time_multiple,
 )
 from .waterfall import TimedWaterfallBatchProducer, WaterfallProducerMetrics, WaterfallRateConfig
-from .vbw import (
-    VBW_MANUAL_REQUEST_MAX_HZ,
-    VBW_MANUAL_REQUEST_MIN_HZ,
-    VBW_MANUAL_UI_STEP_HZ,
-    VBW_EXPOSED_MODES,
-    VBW_MODE_RATIOS,
-    VBW_MODE_VALUES,
-    validate_manual_vbw,
-    validate_vbw_mode,
-)
+from .vbw import VBW_FIXED_MODE, VBW_MODE_RATIOS, validate_fixed_vbw_mode
+
+if TYPE_CHECKING:
+    from backend.recording.recorder import San90RtaRecorder
 
 
 class SimulatorSource(AnalyzerSource):
@@ -128,16 +125,52 @@ class SimulatorSource(AnalyzerSource):
         self._waterfall = TimedWaterfallBatchProducer(
             self._point_count, self._configuration_generation, self._waterfall_config
         )
+        self._recording_sink: San90RtaRecorder | None = None
+        # Import lazily to keep the analyzer factory independent from the AI
+        # pipeline's RawTraceMetadata import during module initialization.
+        from backend.ai_stream.config import AiStreamConfig
+        from backend.ai_stream.pipeline import AiStreamPipeline
+        self._ai_stream = AiStreamPipeline(AiStreamConfig.from_environment(), preview_source="simulator")
         self._frame_rate_hz = max(self._minimum_frame_rate_hz, self._waterfall_config.rows_per_second * 4.0)
 
     def connect(self) -> None:
         with self._lock:
             self._connected = True
+        self._ai_stream.start()
 
     def disconnect(self) -> None:
         self.stop()
+        self._ai_stream.stop()
         with self._lock:
             self._connected = False
+            recording_sink = self._recording_sink
+        if recording_sink is not None:
+            recording_sink.source_disconnected()
+
+    def set_recording_sink(self, recorder: San90RtaRecorder | None) -> None:
+        """Attach an optional bounded recorder without changing realtime consumers."""
+        with self._lock:
+            self._recording_sink = recorder
+
+    def get_ai_stream_status(self) -> dict[str, object]:
+        return self._ai_stream.status()
+
+    def set_ai_stream_enabled(self, enabled: bool) -> dict[str, object]:
+        self._ai_stream.set_enabled(enabled)
+        return self._ai_stream.status()
+
+    def set_ai_power_profile(self, name: str) -> dict[str, object]:
+        self._ai_stream.set_power_profile(name)
+        return self._ai_stream.status()
+
+    def ai_preview_status(self, *, viewer: bool = False) -> dict[str, object]:
+        return self._ai_stream.preview_status(viewer=viewer)
+
+    def ai_preview_image(self, sequence: int):
+        return self._ai_stream.preview_image(sequence)
+
+    def clear_ai_preview(self, reason: str = "waiting") -> None:
+        self._ai_stream.clear_preview(reason)
 
     def start(self) -> None:
         with self._lock:
@@ -166,7 +199,7 @@ class SimulatorSource(AnalyzerSource):
             source="simulator",
             measurement_modes=("rta",),
             supported_controls=frozenset({
-                "center_frequency_hz", "span_hz", "rbw_hz", "rbw_mode", "vbw_mode",
+                "center_frequency_hz", "span_hz", "rbw_hz", "rbw_mode",
                 "reference_level_dbm", "attenuation_db", "preamplifier",
                 "gain_strategy", "if_agc_enabled", "if_agc_target_dbfs", "if_agc_period_s",
                 "window", "detector",
@@ -191,15 +224,8 @@ class SimulatorSource(AnalyzerSource):
                     IF_AGC_PERIOD_MAX_S,
                     IF_AGC_PERIOD_UI_STEP_S,
                 ),
-                "vbw_hz": NumericRange(
-                    VBW_MANUAL_REQUEST_MIN_HZ,
-                    VBW_MANUAL_REQUEST_MAX_HZ,
-                    VBW_MANUAL_UI_STEP_HZ,
-                ),
             },
-            enum_values={
-                "vbw_mode": VBW_EXPOSED_MODES,
-            },
+            enum_values={},
             native_point_counts=tuple(step.point_count for step in SAN90_RESOLUTION_TRADEOFF_STEPS),
             supports_density=False,
             center_frequency_min_hz=1e6,
@@ -259,9 +285,7 @@ class SimulatorSource(AnalyzerSource):
             raise AnalyzerConfigurationError("manual RBW mode requires rbw_hz")
         if settings.rbw_hz is not None and settings.rbw_hz <= 0:
             raise AnalyzerConfigurationError("rbw_hz must be positive")
-        validate_vbw_mode(settings.vbw_mode)
-        if settings.vbw_mode == "manual":
-            validate_manual_vbw(settings.vbw_hz)
+        validate_fixed_vbw_mode(settings.vbw_mode)
         validate_sweep_time_mode(settings.sweep_time_mode)
         if settings.sweep_time_mode == "custom-multiple":
             validate_sweep_time_multiple(settings.sweep_time_multiple)
@@ -295,11 +319,7 @@ class SimulatorSource(AnalyzerSource):
                 selected_step.point_count if selected_step is not None else
                 self._native_point_count if actual_rbw < 200_000 else max(16, self._native_point_count // 2)
             )
-            actual_vbw = (
-                validate_manual_vbw(settings.vbw_hz)
-                if settings.vbw_mode == "manual"
-                else actual_rbw * VBW_MODE_RATIOS[settings.vbw_mode]
-            )
+            actual_vbw = actual_rbw * VBW_MODE_RATIOS[VBW_FIXED_MODE]
             minimum_sweep_s = 1.0 / max(self._minimum_frame_rate_hz, 1.0)
             if settings.sweep_time_mode == "manual":
                 actual_sweep_s = max(minimum_sweep_s, validate_manual_sweep_time(settings.sweep_time_s))
@@ -488,15 +508,19 @@ class SimulatorSource(AnalyzerSource):
                 frame = self._generate_frame()
                 raw = np.ascontiguousarray(np.clip((frame.values + 120.0) * (255.0 / 120.0), 0, 255), dtype=np.uint8)
                 receipt_ns = time.monotonic_ns()
+                recorder_packet = None
+                recorder_raw = None
+                recording_sink = None
+                ai_packet = None
+                ai_metadata = None
+                ai_trace_period_ns = 0
                 with self._lock:
                     if frame.configuration_generation != self._configuration_generation or frame.point_count != self._point_count:
                         continue
                     self._latest.publish(frame)
                     self._max_hold.accumulate(frame)
                     span = frame.span_hz
-                    temporal = self._spectrum_temporal.add_packet(
-                        raw.reshape(1, raw.size),
-                        RawTraceMetadata(
+                    metadata = RawTraceMetadata(
                             sequence=frame.sequence,
                             device_timestamp_ns=frame.timestamp_ns,
                             host_timestamp_ns=time.time_ns(),
@@ -509,7 +533,10 @@ class SimulatorSource(AnalyzerSource):
                             reference_level_dbm=frame.reference_level_dbm,
                             mapping=RawAmplitudeMapping(120.0 / 255.0, -120.0),
                             configuration_generation=frame.configuration_generation,
-                        ),
+                        )
+                    temporal = self._spectrum_temporal.add_packet(
+                        raw.reshape(1, raw.size),
+                        metadata,
                     )
                     if temporal is not None:
                         self._spectrum_temporal_exchange.publish(temporal)
@@ -522,6 +549,75 @@ class SimulatorSource(AnalyzerSource):
                     self._received += 1
                     self._last_frame_ns = frame.timestamp_ns
                     period = max(1.0 / self._frame_rate_hz, float(self._settings.sweep_time_s or 0.0))
+                    # Model one native-rate packet for the optional AI branch
+                    # without changing simulator display/waterfall production.
+                    ai_trace_count = max(1, round(6_400 * period))
+                    ai_packet = np.repeat(raw.reshape(1, raw.size), ai_trace_count, axis=0)
+                    ai_metadata = replace(
+                        metadata,
+                        sequence=frame.sequence * ai_trace_count + ai_trace_count - 1,
+                    )
+                    ai_trace_period_ns = max(1, round(period * 1e9 / ai_trace_count))
+                    recording_sink = self._recording_sink
+                    if recording_sink is not None:
+                        # The display frame already includes software Amplitude
+                        # Offset. Recreate native simulator codes so the file
+                        # stores native offset and software correction separately.
+                        native_values = frame.values - np.float32(self._settings.amplitude_offset_db)
+                        recorder_raw = np.ascontiguousarray(
+                            np.clip((native_values + 120.0) * (255.0 / 120.0), 0, 255),
+                            dtype=np.uint8,
+                        )
+                        recorder_packet = RecordingPacket(
+                            configuration=RecordingConfiguration(
+                                configuration_generation=frame.configuration_generation,
+                                center_frequency_hz=frame.center_frequency_hz,
+                                start_frequency_hz=frame.start_frequency_hz,
+                                stop_frequency_hz=frame.stop_frequency_hz,
+                                span_hz=frame.span_hz,
+                                rbw_hz=frame.rbw_hz,
+                                vbw_hz=frame.vbw_hz,
+                                sweep_time_s=frame.sweep_time_s,
+                                reference_level_dbm=frame.reference_level_dbm,
+                                hardware_scale_db_per_code=120.0 / 255.0,
+                                hardware_offset_dbm=-120.0,
+                                software_amplitude_offset_db=self._settings.amplitude_offset_db,
+                                frame_width=frame.point_count,
+                                fft_size=frame.point_count,
+                                metadata={
+                                    "schema": "san90-config/1",
+                                    "verified": {
+                                        "window": self._settings.window,
+                                        "detector": self._settings.detector,
+                                        "preamplifier": self._settings.preamplifier,
+                                        "gain_strategy": self._settings.gain_strategy,
+                                        "if_agc_enabled": self._settings.if_agc_enabled,
+                                        "rbw_mode": self._settings.rbw_mode,
+                                        "vbw_mode": self._settings.vbw_mode,
+                                    },
+                                },
+                            ),
+                            first_sequence=frame.sequence,
+                            trace_count=1,
+                            device_packet_timestamp_ns=frame.timestamp_ns,
+                            host_receipt_unix_ns=time.time_ns(),
+                            host_receipt_monotonic_ns=receipt_ns,
+                            nominal_trace_period_ns=int(period * 1e9),
+                            packet_acquisition_duration_ns=int(period * 1e9),
+                        )
+                if recording_sink is not None and recorder_packet is not None and recorder_raw is not None:
+                    try:
+                        recording_sink.offer_packet(recorder_raw, recorder_packet)
+                    except Exception:
+                        # Recording is optional and must never take down the
+                        # simulator/realtime pipeline.
+                        pass
+                if ai_packet is not None and ai_metadata is not None:
+                    self._ai_stream.offer_packet(
+                        ai_packet,
+                        ai_metadata,
+                        trace_timestamp_step_ns=ai_trace_period_ns,
+                    )
             except Exception:
                 self._stop_event.set()
                 raise

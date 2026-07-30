@@ -62,7 +62,15 @@ function parseAiDetectionResult(payload: Uint8Array): AiDetectionResult {
       ? data[name] as number
       : null
   )
+  const source = data.source
+  if (
+    source !== undefined &&
+    source !== 'san90' &&
+    source !== 'simulator' &&
+    source !== 'playback'
+  ) throw new Error('AI detection source is invalid')
   return {
+    ...(source === undefined ? {} : { source }),
     sequence: optionalNumber('sequence'),
     timestampNs: optionalNumber('timestamp_ns'),
     generatedAt: optionalNumber('generated_at'),

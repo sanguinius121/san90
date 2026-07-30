@@ -1,12 +1,23 @@
 /// <reference lib="webworker" />
 import { parseAnalyzerMessage } from '../data/binaryProtocol'
+import { generationAfterStatus } from '../data/sourceGeneration'
+import type { AnalyzerSourceType } from '../types'
 
 const workerScope = self as unknown as DedicatedWorkerGlobalScope
 let currentGeneration = 0
+let currentSource: AnalyzerSourceType | null = null
 workerScope.onmessage = (event: MessageEvent<ArrayBuffer>) => {
   try {
     const parsed = parseAnalyzerMessage(event.data)
-    if (parsed.kind === 'status') currentGeneration = Math.max(currentGeneration, parsed.status.configuration_generation)
+    if (parsed.kind === 'status') {
+      currentGeneration = generationAfterStatus(
+        currentSource,
+        currentGeneration,
+        parsed.status.source,
+        parsed.status.configuration_generation,
+      )
+      currentSource = parsed.status.source
+    }
     else if (parsed.kind === 'ai-detections') {
       workerScope.postMessage(parsed)
       return

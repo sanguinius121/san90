@@ -19,10 +19,9 @@ enum (`int` ABI) at header lines 1123 and 1132. There is no VBW Auto enum.
 actual-value source.
 
 VBW uses the existing owner-thread stop/configure/readback/start transaction.
-The Manual, 0.01×, and 10× mappings remain available to the standalone
-diagnostic, but are not advertised through application capabilities or
-accepted by the web API. The UI exposes only RBW and 0.1× RBW and defaults to
-0.1× RBW.
+The application fixes `VBWMode` at 0.1× RBW for consistent AI-image timing and
+appearance. VBW mode/value are not advertised as writable controls and
+non-fixed requests are rejected before hardware configuration.
 
 ## Hardware behavior
 
@@ -68,7 +67,7 @@ python3 backend/tools/test_san90_vbw.py --sample-seconds 0.3
 
 ## UI behavior
 
-The Bandwidth panel obtains the mode list from analyzer capabilities. It shows
-only RBW and 0.1× RBW, with 0.1× as the startup default. The VBW value is
-read-only and displays the actual returned value in a compact engineering
-unit. RBW changes update VBW only from returned analyzer settings.
+The Bandwidth panel has no VBW selector or adjustment buttons. Its read-only
+VBW field displays the actual returned `ProfileOut.VBW_Hz` value in a compact
+engineering unit and refreshes through analyzer-settings polling. RBW changes
+update VBW only from returned analyzer settings.

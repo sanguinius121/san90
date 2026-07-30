@@ -32,6 +32,7 @@ const held = (
 })
 
 const result = (detections: AiDetectionResult['detections']): AiDetectionResult => ({
+  source: 'playback',
   sequence: 7,
   timestampNs: 1_000_000_000,
   generatedAt: 1,
@@ -111,6 +112,7 @@ describe('AI annotation behavior', () => {
       { label: 'DJI_20MHz', confidence: 0.86, frequencyStartHz: 2.46e9, frequencyStopHz: 2.48e9 },
     ])))
     expect(screen.getByText('DJI_20MHz 86%')).toBeTruthy()
+    expect(container.querySelector('title')?.textContent).toContain('Playback AI')
     expect(container.querySelector('.ai-annotation--low')).toBeTruthy()
     expect(container.querySelector('.ai-annotation--medium')).toBeTruthy()
     expect(container.querySelector('.ai-annotation--high')).toBeTruthy()

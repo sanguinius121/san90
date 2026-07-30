@@ -12,7 +12,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from fastapi.exceptions import RequestValidationError
 
 from backend.api.service import AnalyzerService
@@ -21,6 +21,10 @@ from backend.analyzer.errors import ControlError, ControlErrorCode
 from backend.hardware.rf_switch import RfSwitchManager
 from backend.hardware.rf_switch.errors import RfSwitchError
 from backend.frequency_scan import FrequencyScanEntry, MIN_SCAN_DURATION_MS
+from backend.recording.config import RecordingPreferences
+from backend.recording.models import RecordingMode
+from backend.recording.recorder import RecordingConflictError
+from backend.playback.engine import PlaybackError
 from backend.analyzer.if_agc import (
     IF_AGC_PERIOD_MAX_S,
     IF_AGC_PERIOD_MIN_S,
@@ -235,6 +239,46 @@ class RfPathRequest(BaseModel):
     path: str
 
 
+class RecordingConfigRequest(BaseModel):
+    mode: Literal["fixed", "manual"]
+    duration_s: float | None = None
+    file_size_limit_bytes: int
+    free_disk_reserve_bytes: int
+    output_directory: str = "."
+    file_prefix: str
+
+
+class RecordingDirectoryRequest(BaseModel):
+    path: str
+
+
+class PlaybackOpenRequest(BaseModel):
+    recording_id: str
+
+
+class PlaybackSeekRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    position_s: float
+
+    @field_validator("position_s")
+    @classmethod
+    def valid_position(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("position_s must be finite")
+        return value
+
+
+class PlaybackStepRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    direction: Literal["previous", "next"]
+
+
+class PlaybackSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    auto_loop: bool
+    run_ai: bool
+
+
 @app.exception_handler(ControlError)
 async def control_error_handler(_: Request, error: ControlError) -> JSONResponse:
     validation_codes = {
@@ -282,6 +326,206 @@ async def settings() -> dict[str, object]:
     return service.settings_payload()
 
 
+@app.get("/api/analyzer/recording/config")
+async def recording_config() -> dict[str, object]:
+    return service.recording_config_payload()
+
+
+@app.get("/api/analyzer/recording/directories")
+async def recording_directories() -> dict[str, object]:
+    try:
+        return await asyncio.to_thread(service.recording_directories_payload)
+    except (ValueError, OSError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "recording_directory_error", "message": str(error)},
+        ) from error
+
+
+@app.post("/api/analyzer/recording/directories")
+async def create_recording_directory(
+    request: RecordingDirectoryRequest,
+) -> dict[str, object]:
+    try:
+        return await asyncio.to_thread(
+            service.create_recording_directory,
+            request.path,
+        )
+    except (ValueError, OSError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_recording_directory", "message": str(error)},
+        ) from error
+
+
+@app.put("/api/analyzer/recording/config")
+async def update_recording_config(request: RecordingConfigRequest) -> dict[str, object]:
+    try:
+        return await asyncio.to_thread(
+            service.configure_recording,
+            RecordingPreferences(
+                mode=RecordingMode(request.mode),
+                duration_s=request.duration_s,
+                file_size_limit_bytes=request.file_size_limit_bytes,
+                free_disk_reserve_bytes=request.free_disk_reserve_bytes,
+                output_directory=request.output_directory,
+                file_prefix=request.file_prefix,
+            ),
+        )
+    except RecordingConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "recording_active", "message": str(error)},
+        ) from error
+    except (ValueError, OSError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_recording_config", "message": str(error)},
+        ) from error
+
+
+@app.post("/api/analyzer/recording/start")
+async def start_recording() -> dict[str, object]:
+    try:
+        return await service.start_recording()
+    except RecordingConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "recording_active", "message": str(error)},
+        ) from error
+    except (ValueError, OSError, RuntimeError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "recording_start_failed", "message": str(error)},
+        ) from error
+
+
+@app.post("/api/analyzer/recording/stop")
+async def stop_recording() -> dict[str, object]:
+    return await service.stop_recording()
+
+
+@app.get("/api/analyzer/recording/status")
+async def recording_status() -> dict[str, object]:
+    return service.recording_status_payload()
+
+
+@app.get("/api/analyzer/recordings")
+async def recordings() -> dict[str, object]:
+    return await asyncio.to_thread(service.recordings_payload)
+
+
+@app.get("/api/analyzer/recordings/{recording_id}")
+async def recording_metadata(recording_id: str) -> dict[str, object]:
+    try:
+        return await asyncio.to_thread(service.recording_metadata_payload, recording_id)
+    except FileNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "recording_not_found", "message": str(error)},
+        ) from error
+
+
+@app.get("/api/analyzer/playback/status")
+async def playback_status() -> dict[str, object]:
+    return service.playback_status_payload()
+
+
+@app.post("/api/analyzer/playback/open")
+async def playback_open(request: PlaybackOpenRequest) -> dict[str, object]:
+    try:
+        return await service.open_playback(request.recording_id)
+    except FileNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "recording_not_found", "message": str(error)},
+        ) from error
+    except PlaybackError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "playback_conflict", "message": str(error)},
+        ) from error
+    except (OSError, ValueError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "playback_open_failed", "message": str(error)},
+        ) from error
+
+
+@app.post("/api/analyzer/playback/play")
+async def playback_play() -> dict[str, object]:
+    try:
+        return await service.play_playback()
+    except PlaybackError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "invalid_playback_state", "message": str(error)},
+        ) from error
+
+
+@app.post("/api/analyzer/playback/pause")
+async def playback_pause() -> dict[str, object]:
+    try:
+        return await service.pause_playback()
+    except PlaybackError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "invalid_playback_state", "message": str(error)},
+        ) from error
+
+
+@app.post("/api/analyzer/playback/seek")
+async def playback_seek(request: PlaybackSeekRequest) -> dict[str, object]:
+    try:
+        return await service.seek_playback(request.position_s)
+    except PlaybackError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "invalid_playback_state", "message": str(error)},
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_playback_position", "message": str(error)},
+        ) from error
+
+
+@app.post("/api/analyzer/playback/step")
+async def playback_step(request: PlaybackStepRequest) -> dict[str, object]:
+    try:
+        return await service.step_playback(request.direction)
+    except PlaybackError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "invalid_playback_state", "message": str(error)},
+        ) from error
+
+
+@app.put("/api/analyzer/playback/settings")
+async def playback_settings(request: PlaybackSettingsRequest) -> dict[str, object]:
+    try:
+        return await service.configure_playback(
+            auto_loop=request.auto_loop,
+            run_ai=request.run_ai,
+        )
+    except PlaybackError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "invalid_playback_state", "message": str(error)},
+        ) from error
+
+
+@app.post("/api/analyzer/playback/stop")
+async def playback_stop() -> dict[str, object]:
+    try:
+        return await service.stop_playback()
+    except PlaybackError as error:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "playback_stop_failed", "message": str(error)},
+        ) from error
+
+
 @app.get("/api/rf-switch/capabilities")
 async def rf_switch_capabilities() -> dict[str, object]:
     return rf_switch.capabilities()
@@ -321,6 +565,27 @@ async def ai_stream_preview() -> Response:
     if image is None:
         raise HTTPException(status_code=404, detail="AI preview is disabled or no preview image is available")
     return Response(content=image, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/analyzer/ai/preview/status")
+async def ai_preview_status(viewer: bool = False) -> dict[str, object]:
+    return service.ai_preview_status(viewer=viewer)
+
+
+@app.get("/api/analyzer/ai/preview/image")
+async def ai_preview_image(sequence: int) -> Response:
+    snapshot = service.ai_preview_image(sequence)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="AI preview sequence is not current")
+    return Response(
+        content=snapshot.image,
+        media_type=snapshot.content_type,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "X-AI-Preview-Sequence": str(snapshot.sequence),
+        },
+    )
 
 
 @app.put("/api/analyzer/frequency")

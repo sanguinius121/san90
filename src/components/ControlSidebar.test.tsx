@@ -55,9 +55,8 @@ const ifAgcCapabilities={...capabilities,
   },
 }
 const vbwCapabilities={...capabilities,
-  supported_controls:[...capabilities.supported_controls,'rbw_hz','rbw_mode','vbw_mode'],
-  numeric_ranges:{...capabilities.numeric_ranges,vbw_hz:{minimum:1,maximum:200_000_000,step:1}},
-  enum_values:{vbw_mode:['ratio-1','ratio-0.1']},
+  supported_controls:[...capabilities.supported_controls,'rbw_hz','rbw_mode'],
+  enum_values:{},
 }
 
 function settings(center = 2.45e9, generation = 1): AnalyzerSettingsApi {
@@ -121,6 +120,28 @@ afterEach(() => {
 })
 
 describe('ControlSidebar hardware controls', () => {
+  it('renders sections in workflow order and keeps all collapsed by default', () => {
+    vi.stubGlobal('fetch', vi.fn(() => json({}, 404)))
+    const { container } = render(<ControlSidebar />)
+    const headings = Array.from(container.querySelectorAll<HTMLButtonElement>('.section-heading'))
+    expect(headings.map(heading => heading.textContent)).toEqual([
+      'Frequency',
+      'Frequency Scan',
+      'RF Path',
+      'Amplitude',
+      'Bandwidth',
+      'Detection',
+      'Record',
+      'Playback',
+    ])
+    expect(headings.every(heading => heading.getAttribute('aria-expanded') === 'false')).toBe(true)
+    expect(container.querySelector('.section-body')).toBeNull()
+
+    fireEvent.click(headings[0])
+    expect(headings[0].getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByLabelText('Center frequency')).toBeTruthy()
+  })
+
   it('does not expose a user-adjustable span section', async () => {
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input)
@@ -129,7 +150,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
     await screen.findByLabelText('Center frequency')
     expect(screen.queryByRole('button', {name: 'Span'})).toBeNull()
     expect(screen.queryByText('FULL SPAN')).toBeNull()
@@ -143,7 +164,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
     await screen.findByLabelText('Center frequency')
     expect(screen.queryByRole('button', {name: 'Trigger'})).toBeNull()
   })
@@ -156,7 +177,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
     const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
     await waitFor(() => expect(center.disabled).toBe(false))
 
@@ -182,7 +203,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
 
     const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
     const unit = await screen.findByLabelText('Center frequency unit') as HTMLSelectElement
@@ -226,7 +247,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
 
     const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
     const unit = await screen.findByLabelText('Center frequency unit') as HTMLSelectElement
@@ -263,7 +284,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
 
     const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
     const unit = await screen.findByLabelText('Center frequency unit') as HTMLSelectElement
@@ -305,7 +326,7 @@ describe('ControlSidebar hardware controls', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     useRuntimeStore.setState({ ifOverflow: true })
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
 
     const offset = await screen.findByLabelText('Amplitude offset') as HTMLInputElement
     await waitFor(() => expect(offset.disabled).toBe(false))
@@ -351,7 +372,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
 
     const attenuation = await screen.findByLabelText('Attenuation') as HTMLInputElement
     const mode = await screen.findByLabelText('Attenuation mode') as HTMLSelectElement
@@ -393,7 +414,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
 
     const center = await screen.findByLabelText('Center frequency') as HTMLInputElement
     await waitFor(() => expect(center.value).toBe('2.45'))
@@ -431,7 +452,7 @@ describe('ControlSidebar hardware controls', () => {
       return json({}, 404)
     })
     vi.stubGlobal('fetch', fetchMock)
-    render(<ControlSidebar />)
+    render(<ControlSidebar defaultSectionsOpen />)
 
     const rbwMode = await screen.findByLabelText('RBW mode')
     await waitFor(() => expect((rbwMode as HTMLSelectElement).disabled).toBe(false))
@@ -461,7 +482,7 @@ describe('ControlSidebar hardware controls', () => {
       }
       return json({},404)
     })
-    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar defaultSectionsOpen/>)
     const rbwMode=await screen.findByLabelText('RBW mode')
     await waitFor(()=>expect((rbwMode as HTMLSelectElement).value).toBe('auto'))
     expect(screen.queryByLabelText('Time/Frequency resolution trade-off')).toBeNull()
@@ -476,45 +497,29 @@ describe('ControlSidebar hardware controls', () => {
     await waitFor(()=>expect(screen.queryByLabelText('Time/Frequency resolution trade-off')).toBeNull())
   })
 
-  it('shows only hardware-advertised VBW modes and keeps ratio readback read-only',async()=>{
+  it('hides VBW selection and displays only the polled hardware readback',async()=>{
     const current=settings()
+    const polled=settings()
+    polled.actual.vbw_hz=24_122.4365
+    let settingsRequests=0
     const fetchMock=vi.fn((input:string|URL|Request)=>{
       const url=String(input)
       if(url.endsWith('/api/analyzer/capabilities'))return json(vbwCapabilities)
-      if(url.endsWith('/api/analyzer/settings'))return json(current)
-      return json({},404)
-    })
-    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
-    const mode=await screen.findByLabelText('VBW mode') as HTMLSelectElement
-    await waitFor(()=>expect(mode.disabled).toBe(false))
-    expect([...mode.options].map(option=>option.text)).toEqual(['VBW = RBW','VBW = 0.1 × RBW'])
-    const value=screen.getByLabelText('VBW') as HTMLInputElement
-    expect(value.disabled).toBe(true)
-    expect(value.value).toBe('6.030609')
-    expect((screen.getByLabelText('VBW unit') as HTMLSelectElement).value).toBe('kHz')
-    expect((screen.getByLabelText('Decrease VBW') as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByLabelText('Increase VBW') as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('commits VBW mode and displays verified RBW-dependent readback',async()=>{
-    let current=settings()
-    const requests:Array<Record<string,unknown>>=[]
-    const fetchMock=vi.fn((input:string|URL|Request,init?:RequestInit)=>{
-      const url=String(input)
-      if(url.endsWith('/api/analyzer/capabilities'))return json(vbwCapabilities)
-      if(url.endsWith('/api/analyzer/settings'))return json(current)
-      if(url.endsWith('/api/analyzer/bandwidth/vbw')&&init?.method==='PUT'){
-        const body=JSON.parse(String(init.body));requests.push(body)
-        current={...current,actual:{...current.actual,vbw_mode:body.mode,vbw_hz:24_122.4365,rbw_hz:241_224.365}}
-        return json(current)
+      if(url.endsWith('/api/analyzer/settings')){
+        settingsRequests+=1
+        return json(settingsRequests===1?current:polled)
       }
       return json({},404)
     })
-    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
-    const mode=await screen.findByLabelText('VBW mode') as HTMLSelectElement
-    fireEvent.change(mode,{target:{value:'ratio-0.1'}})
-    await waitFor(()=>expect(requests).toEqual([{mode:'ratio-0.1'}]))
-    await waitFor(()=>expect((screen.getByLabelText('VBW') as HTMLInputElement).value).toBe('24.122436'))
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar defaultSectionsOpen/>)
+    const value=await screen.findByLabelText('VBW') as HTMLInputElement
+    expect(value.readOnly).toBe(true)
+    expect(screen.queryByLabelText('VBW mode')).toBeNull()
+    expect(screen.queryByLabelText('VBW unit')).toBeNull()
+    expect(screen.queryByLabelText('Decrease VBW')).toBeNull()
+    expect(screen.queryByLabelText('Increase VBW')).toBeNull()
+    await waitFor(()=>expect(value.value).toBe('24.122436'))
+    expect(fetchMock.mock.calls.some(([url])=>String(url).endsWith('/api/analyzer/bandwidth/vbw'))).toBe(false)
   })
 
   it('commits IF AGC toggle and uses verified target readback without polling over an active draft',async()=>{
@@ -536,7 +541,7 @@ describe('ControlSidebar hardware controls', () => {
       }
       return json({},404)
     })
-    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar defaultSectionsOpen/>)
     const toggle=await screen.findByRole('switch')
     await waitFor(()=>expect((toggle as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(toggle)
@@ -566,7 +571,7 @@ describe('ControlSidebar hardware controls', () => {
       }
       return json({},404)
     })
-    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar defaultSectionsOpen/>)
     const mode=await screen.findByLabelText('IF AGC period mode') as HTMLSelectElement
     await waitFor(()=>expect(mode.disabled).toBe(false))
     fireEvent.change(mode,{target:{value:'one-shot'}})
@@ -590,7 +595,7 @@ describe('ControlSidebar hardware controls', () => {
       if(url.endsWith('/api/analyzer/settings'))return json(current)
       return json({},404)
     })
-    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar defaultSectionsOpen/>)
     const target=await screen.findByLabelText('IF AGC target') as HTMLInputElement
     await waitFor(()=>expect(target.disabled).toBe(true))
     expect((screen.getByLabelText('IF AGC period mode') as HTMLSelectElement).disabled).toBe(true)
@@ -610,7 +615,7 @@ describe('ControlSidebar hardware controls', () => {
       if(url.endsWith('/api/analyzer/settings'))return json(current)
       return json({},404)
     })
-    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar defaultSectionsOpen/>)
     const gain=await screen.findByLabelText('IF AGC gain') as HTMLInputElement
     await waitFor(()=>expect(gain.value).toBe('—'))
     for(const [value,text] of [[6,'6'],[-3.5,'-3.5'],[0,'0'],[null,'—']] as const){
@@ -627,8 +632,8 @@ describe('ControlSidebar hardware controls', () => {
       if(url.endsWith('/api/analyzer/settings'))return json(current)
       return json({},404)
     })
-    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar/>)
-    await screen.findByLabelText('VBW mode')
+    vi.stubGlobal('fetch',fetchMock);render(<ControlSidebar defaultSectionsOpen/>)
+    await screen.findByLabelText('VBW')
     expect(screen.queryByRole('button',{name:'Sweep'})).toBeNull()
     expect(screen.queryByLabelText('Sweep time mode')).toBeNull()
     expect(screen.queryByLabelText('Actual sweep time')).toBeNull()

@@ -7,6 +7,7 @@ export interface HeldAiDetection extends AiFrequencyDetection {
   id: string
   expiresAtMs: number
   receivedAtNs: number | null
+  source?: AiDetectionResult['source']
 }
 
 export interface PlacedAiDetection extends HeldAiDetection {
@@ -55,6 +56,7 @@ export function mergeHeldDetections(
       id: match?.id ?? `${result.sequence ?? result.timestampNs ?? nowMs}:${index}:${detection.label}:${detection.frequencyStartHz}`,
       expiresAtMs: nowMs + holdMs,
       receivedAtNs: result.receivedAtNs,
+      source: result.source,
     }
   })
   return [

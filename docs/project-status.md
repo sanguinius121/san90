@@ -1,6 +1,6 @@
 # SAN-90 Spectrum Console — project status and handoff
 
-Last updated: 2026-07-28
+Last updated: 2026-07-30
 
 Repository: `/home/tuancoi/san90`  
 Snapshot commit: `dc63492c9876708e5b726d8ed60d41197a0c61ab`
@@ -55,8 +55,69 @@ The following major features are implemented:
 - Bounded 640×640 GRAY8 ZeroMQ image output for an external AI service.
 - A bounded port-5558 AI-result subscriber and compact, frequency-aligned
   current-detection strip between the spectrogram and spectrum.
+- The desktop measurement/right-sidebar boundary is a 6 px accessible vertical
+  splitter. The complete right dock defaults to 418 px, persists locally, and
+  is clamped to 398–778 px while preserving a 640 px measurement minimum.
+  Pointer updates are animation-frame bounded and do not remount either WebGL
+  renderer, recreate the spectrogram texture, clear waterfall history, or
+  alter the fixed five-second visible interval.
+- The right navigation rail has separate `RF` and `AI Preview` destinations.
+  RF owns the Frequency, Frequency Scan, RF Path, Amplitude, Bandwidth,
+  Detection, Record, and Playback sections. AI Preview replaces the sidebar
+  content with only the latest actual 640×640 GRAY8 image submitted by the
+  existing AI publisher. A queue-one, 2 FPS PNG
+  worker stores one immutable snapshot outside the acquisition thread. It
+  copies/encodes only while a visible frontend renews a 1.5-second viewer
+  lease, so collapsed, unmounted, and hidden previews consume no PNG-encoding
+  CPU after lease expiry.
+  Sequence-exact no-cache APIs and playback source/epoch/CONFIG invalidation
+  prevent stale metadata or images after seek, loop, Stop, and source restore.
+  Hardware, simulator, and playback all use the same preview path without
+  changing the port-5557/5558 contracts.
 - A backend-owned Phase 1 frequency scan loops enabled center-frequency
   entries in order with verified-readback dwell timing and realtime status.
+- The RF sidebar follows the workflow order Frequency, Frequency Scan,
+  RF Path, Amplitude, Bandwidth, Detection, Record, and Playback. Every section
+  starts collapsed and mounts its controls only when the operator expands it.
+- The left analysis rail exposes only Peak Search, Marker, and Pan. The
+  non-functional Graph, Trace, and Zoom entries have been removed.
+- Version 1 of the application-owned `.san90rta` binary format, its sequential
+  validating reader, dBm/frequency reconstruction, inspection/CSV CLI,
+  sequential writer, safe `.part` finalization, and bounded recorder engine
+  are implemented backend-side. The recorder owns immutable native payload
+  snapshots, uses a 64 MiB/256-item queue, writes explicit coalesced gaps, and
+  supports manual/fixed, size, low-disk, overrun, disconnect, and shutdown
+  stops. A simulator-only sink validates fixed and multi-configuration files.
+  The same recorder is now connected after the existing consumers in the real
+  SAN-90 owner-thread acquisition path. Persistent backend configuration and
+  recording config/start/stop/status REST APIs are implemented. Short physical
+  tests validated fixed, manual, tune, Frequency Scan, mapping-change, and
+  controlled source-disconnect recordings. A compact sidebar Record panel now
+  supports fixed/manual configuration, ON/OFF control, protected drafts,
+  binary MB/GB limit conversion, disk/queue/gap metrics, and readable terminal
+  states at low-rate REST polling.
+- The backend-owned recording root defaults to `~/SAN90_Recordings`, outside
+  the repository, and may be overridden with `SAN90_RECORDING_ROOT`. The
+  `Output directory` field now has a compact folder chooser that lists and
+  creates safe relative subdirectories below that root; symlinks and paths
+  escaping the root remain rejected.
+- Playback securely catalogs clean `.san90rta` files and replays them
+  at 1× through the existing temporal-spectrum/waterfall/WebSocket pipeline.
+  The full compact Playback panel now provides recording refresh/Open,
+  Play/Pause/Stop, a protected absolute timeline, fixed ±5-second seek,
+  previous/next trace, Auto Loop, and optional playback AI rerun. Playback is
+  permanently 1× and exposes no speed setting. A monotonic epoch plus a bounded
+  image-sequence registry rejects stale AI results after seek, loop, CONFIG,
+  Stop, or restore without changing the port-5557/5558 contracts. Short
+  simulator and real-SAN-90 acceptance passed Fixed, Tune, scan, seek, AI, and
+  two-loop cases; hardware restored at 2.45 GHz with errors/timeouts unchanged
+  at zero. The browser generation guard resets on display-source transitions,
+  so Stop accepts a lower hardware generation instead of leaving the plots
+  frozen on the final playback frame. Playback CONFIG activation also
+  distinguishes display-geometry changes from calibration-only readback
+  changes: recorded native-offset drift updates calibration and AI correlation
+  without clearing frequency-aligned spectrogram history. See
+  `docs/playback-phase1.md` and `docs/playback-phase2.md`.
 - Managed frontend/backend start and stop, including guarded SAN-90 USB reset
   for handoff to SAStudio.
 
@@ -91,6 +152,14 @@ The verified conservative startup profile is:
 - VBW: 0.1 × RBW;
 - window: Blackman–Nuttall;
 - detector: positive peak.
+
+The 2026-07-29 recording acceptance used the managed real SAN-90 backend. Six
+short recordings validated CRCs and END counters with no rejected batches,
+lost traces, or additional acquisition errors/timeouts. The observed
+3,328-point raw recording rate was 16.15 MB/s, below the older 25.45 MB/s
+profile measurement; this is a measured baseline discrepancy to investigate,
+not evidence of recorder queue pressure. See
+`docs/san90-rta-recording-hardware-acceptance.md`.
 
 Reference level is not an RF input safety limit. Confirm the signal level
 against the product specification before attaching a source.
@@ -194,9 +263,10 @@ while still max-holding every native trace. See
   profile enable readbacks matched exactly. Under the safe input condition,
   runtime gain remained `0 dB` and IF overflow remained false; gain movement
   and overflow mitigation near saturation remain unverified.
-- VBW exposes only RBW and 0.1× RBW, defaulting to 0.1×. Manual, 0.01× RBW,
-  and 10× RBW remain documented native SDK modes but are intentionally omitted
-  from application capabilities and rejected by the web API.
+- VBW is fixed at 0.1× RBW for consistent AI-image timing and appearance.
+  It is not advertised as a writable application control. The UI hides mode
+  selection and displays only the actual `ProfileOut.VBW_Hz` readback from
+  settings polling.
 - A short SAN-90 run on 2026-07-28 verified all five VBW modes under auto RBW
   and two manual RBW profiles. Ratio values tracked actual RBW exactly. Manual
   requests below actual RBW/1000 were raised to that floor, requests above
@@ -535,14 +605,16 @@ These observations are transient and should be re-queried.
 
 ## Known gaps and recommended next work
 
-1. Make the external AI repository reproducible on a fresh clone by adding
+1. Add safe recording download/delete management when required; keep active
+   `.part` files and backend-owned path rules protected.
+2. Make the external AI repository reproducible on a fresh clone by adding
    correct submodule metadata or vendoring it intentionally.
-2. Add a managed AI-service command and explicit detector health reporting.
-3. Remove or generation-scope the detector's legacy accumulated frequency
+3. Add a managed AI-service command and explicit detector health reporting.
+4. Remove or generation-scope the detector's legacy accumulated frequency
    ranges; the web strip already ignores them.
-4. Keep hardware span deferred until SDK behavior is measured rather than
+5. Keep hardware span deferred until SDK behavior is measured rather than
    guessed; preserve the verified Sweep Time readback path.
-5. Revalidate FT232H reconnect on each target machine's USB permissions and
+6. Revalidate FT232H reconnect on each target machine's USB permissions and
    udev configuration.
 
 ## Canonical documentation
@@ -555,6 +627,12 @@ These observations are transient and should be re-queried.
 - `docs/san90-resolution-tradeoff-table.md` — measured eight-profile table.
 - `docs/san90-resolution-tradeoff-report.md` — trade-off implementation report.
 - `docs/realtime-binary-protocol.md` — browser streaming protocol.
+- `docs/san90-rta-recording-format.md` — custom native RTA file format,
+  sequential reader, recovery rules, and future recorder architecture.
+- `docs/playback-phase1.md` — secure recording catalog, playback architecture,
+  API, source arbitration, timing, and hardware acceptance.
+- `docs/playback-phase2.md` — seek/step/loop UI, playback epochs, AI rerun
+  correlation, and simulator/hardware acceptance.
 - `docs/frequency-scan.md` — Phase 1 sequential scan API and scheduler behavior.
 - `docs/spectrogram-continuity-alignment-report.md` — waterfall seam and axis
   alignment work.
@@ -563,6 +641,8 @@ These observations are transient and should be re-queried.
 - `docs/ai-gray8-stream.md` — backend AI image stream.
 - `docs/ai-gray8-protocol.md` — GRAY8 wire protocol.
 - `docs/ai-gray8-implementation-report.md` — AI publisher implementation.
+- `docs/resizable-right-dock-ai-preview.md` — right-dock layout, preview
+  architecture, API, lifecycle invariants, and focused acceptance.
 
 When documents disagree, prefer current source code, hardware readback, and the
 newer measured report. Do not invent SDK symbols or control semantics.

@@ -1,11 +1,18 @@
 import { SpectrogramPanel } from "./SpectrogramPanel";
 import { SpectrumPanel } from "./SpectrumPanel";
 import { AiAnnotationStrip } from "./AiAnnotationStrip";
-import { ToolRail } from "./ToolRail";
+import { ToolRail, type DockPanel } from "./ToolRail";
 import { ControlSidebar } from "./ControlSidebar";
+import { useRef, useState } from "react";
 import { useRuntimeStore } from "../stores";
+import { RightDockSplitter } from "./layout/RightDockSplitter";
+import { useResizableRightDock } from "../hooks/useResizableRightDock";
+import { AiPreviewSidebar } from "./AiPreviewSidebar";
 
 export function AppLayout() {
+  const gridRef = useRef<HTMLElement>(null);
+  const [dockPanel, setDockPanel] = useState<DockPanel>("rf");
+  const rightDock = useResizableRightDock(gridRef);
   const runtime = useRuntimeStore();
   const {
     fps,
@@ -129,14 +136,29 @@ export function AppLayout() {
           })}
         </time>
       </header>
-      <main className="app-grid">
+      <main className="app-grid" ref={gridRef}>
         <div className="measurement-area">
           <SpectrogramPanel />
           <AiAnnotationStrip />
           <SpectrumPanel />
         </div>
-        <ToolRail />
-        <ControlSidebar />
+        <RightDockSplitter
+          width={rightDock.width}
+          limits={rightDock.limits}
+          onBeginDrag={rightDock.beginDrag}
+          onMoveDrag={rightDock.moveDrag}
+          onEndDrag={rightDock.endDrag}
+          onCancelDrag={rightDock.cancelDrag}
+          onResizeBy={rightDock.resizeBy}
+          onMinimum={rightDock.setToMinimum}
+          onMaximum={rightDock.setToMaximum}
+        />
+        <div className="right-dock">
+          <ToolRail panel={dockPanel} onPanelChange={setDockPanel} />
+          {dockPanel === "rf"
+            ? <ControlSidebar onResetLayout={rightDock.reset} />
+            : <AiPreviewSidebar onResetLayout={rightDock.reset} />}
+        </div>
       </main>
     </div>
   );

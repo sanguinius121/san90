@@ -101,12 +101,39 @@ If a downstream adapter needs three channels it may use `np.repeat(image[:, :, N
 ```bash
 python3 tools/ai_gray8_receiver.py
 python3 tools/ai_gray8_receiver.py --save-dir ./received_preview --save-every 10 --max-files 20
+python3 tools/ai_gray8_receiver.py --save-dir ./received_preview --save-every 1 --max-files 200 --stop-after 200
 python3 tools/ai_gray8_receiver.py --display  # optional OpenCV
 ```
 
-The receiver validates metadata/payloads, reports rates/statistics, and skips malformed messages. Saved PNGs are lossless grayscale mode `L` with matching JSON.
+The receiver validates metadata/payloads, reports rates/statistics, and skips malformed messages. Saved PNGs are lossless grayscale mode `L` with matching JSON. `--stop-after` counts valid received images and exits cleanly after the requested count.
 
-For publisher previews, set `AI_PREVIEW_ENABLED=true`. At most one PNG/JSON pair per interval is written and old pairs rotate out. `GET /api/ai-stream/preview.png` returns the latest cached PNG only when requested.
+`AI_PREVIEW_ENABLED=true` still enables the optional rotating diagnostic files.
+At most one PNG/JSON pair per interval is written and old pairs rotate out.
+
+The browser preview is independent of diagnostic disk output. The publisher
+offers the exact normalized GRAY8 image sent to port 5557 to a queue-one,
+2 FPS PNG worker, but it performs the ownership copy and encode only while a
+visible frontend renews a 1.5-second viewer lease. Only the latest encoded
+image is retained in memory:
+
+```text
+GET /api/analyzer/ai/preview/status?viewer=true
+GET /api/analyzer/ai/preview/image?sequence=<latest sequence>
+```
+
+Image retrieval is sequence-exact and uses no-cache headers, so metadata cannot
+silently be paired with a newer image. Source, playback epoch, CONFIG, and
+frequency metadata are internal preview fields; the port-5557 protocol remains
+unchanged. Playback seek/loop/CONFIG/Stop and source restoration clear the
+preview through the same epoch/reset rules used for AI detections.
+
+The expanded, visible sidebar polls with `viewer=true`. Collapse/unmount stops
+polling; hidden-page status checks use `viewer=false`. When the lease expires,
+new AI images bypass preview before the 409,600-byte copy while normal
+port-5557 publishing continues unchanged.
+
+`GET /api/ai-stream/preview.png` remains as a legacy latest-image diagnostic
+route.
 
 ## Metrics and validation
 

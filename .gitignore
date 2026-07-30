@@ -5,5 +5,7 @@ dist/
 .run/
 config/frequency-scan.json
 config/.frequency-scan.json.*.tmp
+config/.recording.json.*.tmp
+recordings/
 __pycache__/
 *.py[cod]

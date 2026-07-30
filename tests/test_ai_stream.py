@@ -128,6 +128,29 @@ class AccumulatorTests(unittest.TestCase):
         self.assertEqual(snapshot["ai_traces_used_total"], 640)
         accumulator.release(completed.buffer)
 
+    def test_capture_callback_and_timeline_namespace_support_epoch_correlation(self) -> None:
+        captures = []
+        metrics = AiStreamMetrics()
+        accumulator = AiImageAccumulator(
+            target_images_per_second=10,
+            queue_size=2,
+            buffer_pool_size=4,
+            profile_provider=lambda: POWER_PROFILES["external_lna"],
+            metrics=metrics,
+            capture_callback=captures.append,
+        )
+        accumulator.configure(640, 1, 1)
+        accumulator.reset_timeline(17)
+        accumulator.offer_packet(
+            np.full((640, 1), 20, dtype=np.uint8),
+            packet_metadata(639, 639_000_000),
+            trace_timestamp_step_ns=1_000_000,
+        )
+        self.assertEqual(len(captures), 1)
+        self.assertEqual(captures[0].sequence, 17 << 32)
+        accumulator.reset_timeline(18)
+        self.assertEqual(accumulator.queue_depth, 0)
+
     def test_packet_can_complete_one_image_and_begin_the_next(self) -> None:
         accumulator, _ = self.make_accumulator()
         for packet in range(6):

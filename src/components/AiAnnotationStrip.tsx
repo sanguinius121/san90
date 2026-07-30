@@ -126,6 +126,11 @@ export function AiAnnotationStrip() {
               detection.label,
               `${Math.round(detection.confidence * 100)}% confidence`,
               `${formatFrequency(detection.frequencyStartHz)} – ${formatFrequency(detection.frequencyStopHz)}`,
+              detection.source === 'playback'
+                ? 'Playback AI'
+                : detection.source == null
+                  ? null
+                  : 'Realtime AI',
               sourceAgeMs == null ? null : `${Math.round(sourceAgeMs)} ms old at receipt`,
             ].filter(Boolean).join(' · ')
             const band = confidenceBand(detection.confidence)

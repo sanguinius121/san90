@@ -33,6 +33,9 @@ class CaptureMetadata:
     frame_width_source: int
     configuration_generation: int
     power_profile: PowerProfile
+    preview_source: str = "hardware"
+    playback_epoch: int | None = None
+    config_id: int | None = None
 
 
 def build_metadata(capture: CaptureMetadata, waterfall_dbm: np.ndarray) -> dict[str, Any]:

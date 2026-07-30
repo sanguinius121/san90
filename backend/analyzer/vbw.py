@@ -23,10 +23,11 @@ VBW_MODE_RATIOS = {
     "ratio-10": 10.0,
 }
 
-# Manual and 0.01× materially reduce acquisition responsiveness on SAN-90.
-# The 10× mode is intentionally hidden as well; the application defaults to
-# 0.1× and exposes only the two filtered ratio choices.
-VBW_EXPOSED_MODES = ("ratio-1", "ratio-0.1")
+# Image timing and appearance vary materially with VBW. Keep acquisition on
+# one fixed hardware mode so live inference and captured training images use
+# the same filtering profile.
+VBW_FIXED_MODE = "ratio-0.1"
+VBW_EXPOSED_MODES: tuple[str, ...] = ()
 
 VBW_MANUAL_REQUEST_MIN_HZ = 1.0
 VBW_MANUAL_REQUEST_MAX_HZ = 200_000_000.0
@@ -37,6 +38,15 @@ def validate_vbw_mode(mode: str) -> str:
     if mode not in VBW_MODE_VALUES:
         raise AnalyzerConfigurationError(
             f"Unsupported vbw_mode {mode!r}; expected one of {tuple(VBW_MODE_VALUES)}"
+        )
+    return mode
+
+
+def validate_fixed_vbw_mode(mode: str) -> str:
+    validate_vbw_mode(mode)
+    if mode != VBW_FIXED_MODE:
+        raise AnalyzerConfigurationError(
+            f"vbw_mode is fixed at {VBW_FIXED_MODE!r}; received {mode!r}"
         )
     return mode
 

@@ -22,10 +22,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--max-files", type=int, default=20)
+    parser.add_argument("--stop-after", type=int, help="Exit after receiving N valid images")
     parser.add_argument("--display", action="store_true")
     args = parser.parse_args()
     if args.save_every < 1 or args.max_files < 1:
         parser.error("--save-every and --max-files must be positive")
+    if args.stop_after is not None and args.stop_after < 1:
+        parser.error("--stop-after must be positive")
     return args
 
 
@@ -78,6 +81,9 @@ def main() -> int:
             received += 1
             if args.save_dir is not None and received % args.save_every == 0:
                 save_preview(args.save_dir, image, metadata, args.max_files)
+            if args.stop_after is not None and received >= args.stop_after:
+                print(f"Received {received} valid images; stopping.")
+                break
             if cv2 is not None:
                 cv2.imshow("SAN-90 GRAY8 waterfall", image)
                 if cv2.waitKey(1) & 0xFF in (27, ord("q")):

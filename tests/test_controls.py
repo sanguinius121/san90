@@ -50,12 +50,12 @@ class ControlModelTests(unittest.TestCase):
         controls = San90Source().get_capabilities().supported_controls
         self.assertEqual(controls, {
             "center_frequency_hz", "reference_level_dbm", "attenuation_db",
-            "preamplifier", "gain_strategy", "rbw_hz", "rbw_mode", "vbw_mode",
+            "preamplifier", "gain_strategy", "rbw_hz", "rbw_mode",
             "window", "detector",
             "if_agc_enabled", "if_agc_target_dbfs", "if_agc_period_s",
             "resolution_tradeoff_index", "amplitude_offset_db",
         })
-        for deferred in ("span_hz",):
+        for deferred in ("span_hz", "vbw_mode", "vbw_hz"):
             self.assertNotIn(deferred, controls)
 
     def test_rbw_window_detector_capabilities_and_mappings(self) -> None:

@@ -17,7 +17,11 @@ from typing import Any, Callable
 
 import numpy as np
 
-from backend.ai_stream import AiStreamConfig, AiStreamPipeline
+from backend.ai_stream.config import AiStreamConfig
+from backend.ai_stream.pipeline import AiStreamPipeline
+from backend.recording.adapter import build_san90_recording_packet
+from backend.recording.models import RecordingPacket
+from backend.recording.recorder import San90RtaRecorder
 
 from .amplitude_correction import (
     AMPLITUDE_OFFSET_MAX_DB,
@@ -102,13 +106,9 @@ from .sweep_time import (
     validate_sweep_time_multiple,
 )
 from .vbw import (
-    VBW_MANUAL_REQUEST_MAX_HZ,
-    VBW_MANUAL_REQUEST_MIN_HZ,
-    VBW_MANUAL_UI_STEP_HZ,
-    VBW_EXPOSED_MODES,
+    VBW_FIXED_MODE,
     VBW_MODE_VALUES,
-    validate_manual_vbw,
-    validate_vbw_mode,
+    validate_fixed_vbw_mode,
     verified_vbw_hz,
 )
 from .raw_buffers import (
@@ -300,6 +300,7 @@ class San90Source(AnalyzerSource):
         self._spectrum_temporal_exchange = LatestSpectrumTemporalExchange()
         self._next_spectrum_ns = 0
         self._ai_stream = AiStreamPipeline(AiStreamConfig.from_environment())
+        self._recording_sink: San90RtaRecorder | None = None
 
     def connect(self) -> None:
         self._ensure_owner_thread()
@@ -326,6 +327,12 @@ class San90Source(AnalyzerSource):
             with self._state_lock:
                 self._thread = None
             self._cancel_pending_commands()
+            self._notify_recording_source_disconnected()
+
+    def set_recording_sink(self, recorder: San90RtaRecorder | None) -> None:
+        """Attach the bounded application recorder; no SDK calls occur here."""
+        with self._state_lock:
+            self._recording_sink = recorder
 
     def start(self) -> None:
         self._require_owner()
@@ -343,7 +350,7 @@ class San90Source(AnalyzerSource):
             measurement_modes=("rta",),
             supported_controls=frozenset({
                 "center_frequency_hz", "reference_level_dbm", "attenuation_db",
-                "preamplifier", "gain_strategy", "rbw_hz", "rbw_mode", "vbw_mode",
+                "preamplifier", "gain_strategy", "rbw_hz", "rbw_mode",
                 "window", "detector",
                 "if_agc_enabled", "if_agc_target_dbfs", "if_agc_period_s",
                 "resolution_tradeoff_index", "amplitude_offset_db",
@@ -364,11 +371,6 @@ class San90Source(AnalyzerSource):
                     IF_AGC_PERIOD_MAX_S,
                     IF_AGC_PERIOD_UI_STEP_S,
                 ),
-                "vbw_hz": NumericRange(
-                    VBW_MANUAL_REQUEST_MIN_HZ,
-                    VBW_MANUAL_REQUEST_MAX_HZ,
-                    VBW_MANUAL_UI_STEP_HZ,
-                ),
             },
             enum_values={
                 "preamplifier": tuple(PREAMPLIFIER_VALUES),
@@ -376,7 +378,6 @@ class San90Source(AnalyzerSource):
                 "rbw_mode": tuple(RBW_MODE_VALUES),
                 "window": tuple(WINDOW_VALUES),
                 "detector": tuple(DETECTOR_VALUES),
-                "vbw_mode": VBW_EXPOSED_MODES,
             },
             native_point_counts=points,
             supports_density=True,
@@ -596,6 +597,15 @@ class San90Source(AnalyzerSource):
     def latest_ai_preview_png(self) -> bytes | None:
         return self._ai_stream.latest_preview_png()
 
+    def ai_preview_status(self, *, viewer: bool = False) -> dict[str, object]:
+        return self._ai_stream.preview_status(viewer=viewer)
+
+    def ai_preview_image(self, sequence: int):
+        return self._ai_stream.preview_image(sequence)
+
+    def clear_ai_preview(self, reason: str = "waiting") -> None:
+        self._ai_stream.clear_preview(reason)
+
     def get_status(self) -> RuntimeStatus:
         with self._state_lock:
             elapsed = 0.0 if self._rate_started_ns is None else (time.monotonic_ns() - self._rate_started_ns) / 1e9
@@ -688,6 +698,7 @@ class San90Source(AnalyzerSource):
                             self._errors += 1
                             self._last_error = f"Unexpected acquisition failure: {error}"
                             self._running = False
+                        self._notify_recording_source_disconnected()
                 continue
             if command.future.cancelled():
                 continue
@@ -792,6 +803,7 @@ class San90Source(AnalyzerSource):
             self._if_agc_gain_db = None
             self._if_agc_gain_monotonic_ns = None
             self._next_if_agc_gain_sample_ns = 0
+        self._notify_recording_source_disconnected()
 
     def _configure_if_agc_on_owner(
         self,
@@ -825,9 +837,8 @@ class San90Source(AnalyzerSource):
 
     @staticmethod
     def _configure_vbw_profile(profile_in: RtaProfile, requested: AnalyzerSettings) -> None:
-        profile_in.VBWMode = VBW_MODE_VALUES[validate_vbw_mode(requested.vbw_mode)]
-        if requested.vbw_mode == "manual":
-            profile_in.VBW_Hz = validate_manual_vbw(requested.vbw_hz)
+        validate_fixed_vbw_mode(requested.vbw_mode)
+        profile_in.VBWMode = VBW_MODE_VALUES[VBW_FIXED_MODE]
 
     @staticmethod
     def _configure_sweep_time_profile(profile_in: RtaProfile, requested: AnalyzerSettings) -> None:
@@ -1030,6 +1041,7 @@ class San90Source(AnalyzerSource):
         if not self._connected:
             raise ControlError(ControlErrorCode.DEVICE_NOT_CONNECTED, "SAN-90 is not connected", recoverable=True)
         started = time.perf_counter()
+        pause_started_ns = time.monotonic_ns()
         was_running = self._running
         previous_settings = replace(self._settings)
         previous_requested = replace(self._requested_settings)
@@ -1051,6 +1063,9 @@ class San90Source(AnalyzerSource):
             self._reset_waterfall_producer_on_owner()
             if was_running:
                 self._start_on_owner()
+                self._note_recording_reconfiguration_pause(
+                    pause_started_ns, time.monotonic_ns(), self._sequence
+                )
                 self._confirm_valid_frame_on_owner()
             elapsed = time.perf_counter()-started
             with self._state_lock:
@@ -1083,6 +1098,9 @@ class San90Source(AnalyzerSource):
                 self._reset_waterfall_producer_on_owner()
                 if was_running:
                     self._start_on_owner()
+                    self._note_recording_reconfiguration_pause(
+                        pause_started_ns, time.monotonic_ns(), self._sequence
+                    )
                     self._confirm_valid_frame_on_owner()
             except BaseException as rollback_error:
                 elapsed = time.perf_counter()-started
@@ -1230,6 +1248,7 @@ class San90Source(AnalyzerSource):
                 self._errors += 1
                 self._last_error = str(error)
                 self._running = False
+            self._notify_recording_source_disconnected()
             return
         overload = classification.if_overflow
 
@@ -1312,6 +1331,44 @@ class San90Source(AnalyzerSource):
             self._spectrum_temporal_exchange.publish(completed_temporal)
         waterfall_producer.add_packet(raw, metadata, trace_timestamp_step_ns=timestamp_step_ns)
         self._ai_stream.offer_packet(raw, metadata, trace_timestamp_step_ns=timestamp_step_ns)
+        recording_sink = self._recording_sink
+        if recording_sink is not None:
+            try:
+                packet = build_san90_recording_packet(
+                    configuration_generation=self._configuration_generation,
+                    first_sequence=self._sequence,
+                    trace_count=count,
+                    frame_width=width,
+                    center_frequency_hz=center,
+                    start_frequency_hz=start,
+                    stop_frequency_hz=stop,
+                    rbw_hz=float(profile.RBW_Hz),
+                    vbw_hz=float(profile.VBW_Hz) if math.isfinite(float(profile.VBW_Hz)) else None,
+                    sweep_time_s=(
+                        actual_trace_period_s(float(frame_info.PacketAcqTime), count)
+                        if math.isfinite(float(frame_info.PacketAcqTime))
+                        and float(frame_info.PacketAcqTime) > 0
+                        else None
+                    ),
+                    fft_size=int(frame_info.FFTSize),
+                    reference_level_dbm=float(profile.RefLevel_dBm),
+                    hardware_scale_db_per_code=hardware_mapping.scale_db_per_code,
+                    hardware_offset_dbm=hardware_mapping.offset_dbm,
+                    software_amplitude_offset_db=self._settings.amplitude_offset_db,
+                    packet_acquisition_time_s=float(frame_info.PacketAcqTime),
+                    device_packet_timestamp_ns=int(auxiliary.nsSinceEpoch),
+                    sdk_trace_timestamp_step_raw=float(frame_info.TraceTimestampStep),
+                    if_overflow=overload,
+                    if_overflow_latched=self._if_overflow.active(receipt_monotonic_ns),
+                    configuration_metadata=self._recording_configuration_metadata(),
+                    host_receipt_unix_ns=host_timestamp_ns,
+                    host_receipt_monotonic_ns=receipt_monotonic_ns,
+                )
+                self._offer_recording_packet(raw, packet)
+            except Exception as error:
+                # Recorder validation, saturation, or writer failure must not
+                # alter acquisition consumers or the SDK owner loop.
+                logger.warning("recording_packet_adapter_failed error=%s", error)
         native_copy_elapsed = time.perf_counter() - native_copy_started
         self._sequence += count
 
@@ -1369,6 +1426,67 @@ class San90Source(AnalyzerSource):
             self._last_frame_ns = latest_device_timestamp_ns
             self._temperature_c = float(auxiliary.Temperature) * 0.01
 
+    def _recording_configuration_metadata(self) -> dict[str, object]:
+        settings = self._settings
+        requested = self._requested_settings
+        return {
+            "schema": "san90-config/1",
+            "requested": {
+                "center_frequency_hz": requested.center_frequency_hz,
+                "rbw_mode": requested.rbw_mode,
+                "rbw_hz": requested.rbw_hz,
+                "reference_level_dbm": requested.reference_level_dbm,
+                "attenuation_db": requested.attenuation_db,
+                "preamplifier": requested.preamplifier,
+                "gain_strategy": requested.gain_strategy,
+                "if_agc_enabled": requested.if_agc_enabled,
+                "if_agc_target_dbfs": requested.if_agc_target_dbfs,
+                "if_agc_period_s": requested.if_agc_period_s,
+                "window": requested.window,
+                "detector": requested.detector,
+            },
+            "verified": {
+                "rbw_mode": settings.rbw_mode,
+                "vbw_mode": settings.vbw_mode,
+                "attenuation_automatic": settings.attenuation_db is None,
+                "attenuation_db": settings.attenuation_db,
+                "preamplifier": settings.preamplifier,
+                "gain_strategy": settings.gain_strategy,
+                "if_agc_enabled": settings.if_agc_enabled,
+                "if_agc_target_dbfs": settings.if_agc_target_dbfs,
+                "if_agc_period_s": settings.if_agc_period_s,
+                "window": settings.window,
+                "detector": settings.detector,
+            },
+            "runtime_at_activation": {"if_agc_gain_db": self._if_agc_gain_db},
+        }
+
+    def _offer_recording_packet(self, raw: np.ndarray, packet: RecordingPacket) -> None:
+        """Contain recorder-side failures outside all realtime consumers."""
+        sink = self._recording_sink
+        if sink is None:
+            return
+        try:
+            sink.offer_packet(raw, packet)
+        except Exception as error:
+            logger.warning("recording_offer_failed error=%s", error)
+
+    def _note_recording_reconfiguration_pause(
+        self, start_monotonic_ns: int, end_monotonic_ns: int, next_sequence: int
+    ) -> None:
+        sink = self._recording_sink
+        if sink is not None:
+            sink.note_reconfiguration_pause(
+                start_monotonic_ns=start_monotonic_ns,
+                end_monotonic_ns=end_monotonic_ns,
+                next_sequence=next_sequence,
+            )
+
+    def _notify_recording_source_disconnected(self) -> None:
+        sink = self._recording_sink
+        if sink is not None:
+            sink.source_disconnected()
+
     def _update_if_agc_gain_from_auxiliary(self, auxiliary: MeasAuxInfo, now_ns: int) -> None:
         """Sample the acquisition-provided runtime gain at a bounded 10 Hz."""
         if now_ns < self._next_if_agc_gain_sample_ns:
@@ -1398,9 +1516,7 @@ class San90Source(AnalyzerSource):
             raise AnalyzerConfigurationError(f"Unsupported rbw_mode {settings.rbw_mode!r}; expected one of {tuple(RBW_MODE_VALUES)}")
         if settings.rbw_mode == "manual" and settings.rbw_hz is None:
             raise AnalyzerConfigurationError("manual RBW mode requires rbw_hz")
-        validate_vbw_mode(settings.vbw_mode)
-        if settings.vbw_mode == "manual":
-            validate_manual_vbw(settings.vbw_hz)
+        validate_fixed_vbw_mode(settings.vbw_mode)
         validate_sweep_time_mode(settings.sweep_time_mode)
         if settings.sweep_time_mode == "custom-multiple":
             validate_sweep_time_multiple(settings.sweep_time_multiple)

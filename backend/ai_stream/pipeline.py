@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 
@@ -15,24 +16,38 @@ from .image_accumulator import AiImageAccumulator
 from .image_publisher import AiImagePublisher
 from .metrics import AiStreamMetrics
 from .power_profiles import PowerProfile, require_power_profile
+from .protocol import CaptureMetadata
 
 
 logger = logging.getLogger("san90.ai_stream")
 
 
 class AiStreamPipeline:
-    def __init__(self, config: AiStreamConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: AiStreamConfig | None = None,
+        *,
+        capture_callback: Callable[[CaptureMetadata], None] | None = None,
+        preview_source: str = "hardware",
+    ) -> None:
         self.config = config or AiStreamConfig.from_environment()
         self.metrics = AiStreamMetrics()
         self._profile_lock = threading.Lock()
         self._profile = require_power_profile(self.config.power_profile)
         self._enabled = self.config.enabled
+        self._preview_context_lock = threading.Lock()
+        self._preview_source = preview_source
+        self._playback_epoch: int | None = None
+        self._config_id: int | None = None
+        self._preview_generation: int | None = None
         self.accumulator = AiImageAccumulator(
             target_images_per_second=self.config.target_images_per_second,
             queue_size=self.config.queue_size,
             buffer_pool_size=self.config.buffer_pool_size,
             profile_provider=self._current_profile,
             metrics=self.metrics,
+            capture_callback=capture_callback,
+            preview_context_provider=self._preview_context,
         )
         self.accumulator.set_enabled(self._enabled)
         self.publisher = AiImagePublisher(self.config, self.accumulator, self.metrics)
@@ -46,6 +61,7 @@ class AiStreamPipeline:
         self.accumulator.set_enabled(False)
         self.publisher.stop()
         self.accumulator.drain()
+        self.clear_preview("disabled")
 
     def configure(self, packet_frames: int, frame_width: int, generation: int) -> None:
         self.accumulator.configure(packet_frames, frame_width, generation)
@@ -53,6 +69,9 @@ class AiStreamPipeline:
     def offer_packet(self, raw: np.ndarray, metadata: RawTraceMetadata, *, trace_timestamp_step_ns: int) -> None:
         if self._enabled:
             try:
+                if metadata.configuration_generation != self._preview_generation:
+                    self._preview_generation = metadata.configuration_generation
+                    self.clear_preview("waiting")
                 self.accumulator.offer_packet(raw, metadata, trace_timestamp_step_ns=trace_timestamp_step_ns)
             # This is the fault boundary protecting the sole SDK acquisition
             # loop. Failures are counted and rate-limited in logs, never hidden.
@@ -73,6 +92,7 @@ class AiStreamPipeline:
         else:
             self.publisher.stop()
             self.accumulator.drain()
+            self.clear_preview("disabled")
 
     def start_publisher(self) -> None:
         self.publisher.start()
@@ -91,6 +111,42 @@ class AiStreamPipeline:
         with self._profile_lock:
             self._profile = profile
         return profile
+
+    def reset_timeline(self, sequence_namespace: int = 0) -> None:
+        self.accumulator.reset_timeline(sequence_namespace)
+        self.clear_preview("waiting")
+
+    def set_preview_context(
+        self,
+        *,
+        source: str | None = None,
+        playback_epoch: int | None = None,
+        config_id: int | None = None,
+    ) -> None:
+        with self._preview_context_lock:
+            if source is not None:
+                self._preview_source = source
+            self._playback_epoch = playback_epoch
+            self._config_id = config_id
+
+    def _preview_context(self) -> tuple[str, int | None, int | None]:
+        with self._preview_context_lock:
+            return self._preview_source, self._playback_epoch, self._config_id
+
+    def clear_preview(self, reason: str = "waiting") -> None:
+        self.publisher.preview_encoder.clear(reason)
+
+    def preview_status(self, *, viewer: bool = False) -> dict[str, object]:
+        if viewer:
+            self.publisher.preview_encoder.renew_viewer_lease()
+        source, _, _ = self._preview_context()
+        return {
+            **self.publisher.preview_store.status(source=source),
+            **self.publisher.preview_encoder.status_metrics(),
+        }
+
+    def preview_image(self, sequence: int):
+        return self.publisher.preview_store.image_for_sequence(sequence)
 
     def _current_profile(self) -> PowerProfile:
         with self._profile_lock:
@@ -111,6 +167,7 @@ class AiStreamPipeline:
             "pixel_format": "GRAY8",
             "payload_size_bytes": 409600,
             "bind": self.config.bind,
+            **self.publisher.preview_encoder.status_metrics(),
             **self.metrics.snapshot(
                 queue_depth=self.accumulator.queue_depth,
                 free_buffer_count=self.accumulator.free_buffer_count,

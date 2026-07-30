@@ -1,6 +1,8 @@
 export type ConnectionState = 'mock' | 'connecting' | 'connected' | 'stopped' | 'error'
-export type AnalyzerSourceType = 'simulator' | 'san90'
-export type ToolMode = 'graph' | 'trace' | 'peak' | 'marker' | 'pan' | 'zoom'
+import type { PlaybackStatus } from './types/playback'
+
+export type AnalyzerSourceType = 'simulator' | 'san90' | 'playback'
+export type ToolMode = 'peak' | 'marker' | 'pan'
 export type SelectOption = { label: string; value: string }
 export type Marker = { bin: number; frequencyHz: number; amplitudeDbm: number }
 
@@ -13,6 +15,7 @@ export interface AiFrequencyDetection {
 }
 
 export interface AiDetectionResult {
+  source?: AnalyzerSourceType
   sequence: number | null
   timestampNs: number | null
   generatedAt: number | null
@@ -119,6 +122,7 @@ export interface AnalyzerRuntimeStatus {
   resolution_tradeoff_state?: 'auto' | 'matched' | 'custom'
   resolution_tradeoff_step_id?: string | null
   frequency_scan?: FrequencyScanStatus
+  playback?: PlaybackStatus
 }
 
 export interface Viewport {

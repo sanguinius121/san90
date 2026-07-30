@@ -3,6 +3,7 @@ import { aiDetections } from "./aiDetections";
 import { useDeviceStore, useRuntimeStore } from "../stores";
 import type { ParsedAnalyzerMessage } from "./binaryProtocol";
 import { acceptsConfigurationGeneration } from "./binaryProtocol";
+import { generationAfterStatus } from "./sourceGeneration";
 
 type WorkerResult =
   | ParsedAnalyzerMessage
@@ -91,14 +92,17 @@ export class WebSocketSpectrumSource {
         const actualRbwHz = data.frame.rbwHz ?? 0,
           actualSpanHz =
             data.frame.spanHz ?? data.frame.stopHz - data.frame.startHz;
+        const frameSource = runtime.playbackActive
+          ? "playback"
+          : (data.frame.source ?? "san90");
         if (
-          runtime.source !== (data.frame.source ?? "san90") ||
+          runtime.source !== frameSource ||
           runtime.pointCount !== data.frame.values.length ||
           runtime.actualRbwHz !== actualRbwHz ||
           runtime.actualSpanHz !== actualSpanHz
         )
           runtime.update({
-            source: data.frame.source ?? "san90",
+            source: frameSource,
             pointCount: data.frame.values.length,
             actualRbwHz,
             actualSpanHz,
@@ -160,12 +164,29 @@ export class WebSocketSpectrumSource {
         aiDetections.publish(data.result);
       } else {
         const status = data.status;
+        const runtimeBeforeStatus = useRuntimeStore.getState();
+        const sourceChanged = runtimeBeforeStatus.source !== status.source;
+        const statusGeneration = generationAfterStatus(
+          runtimeBeforeStatus.source,
+          runtimeBeforeStatus.configurationGeneration,
+          status.source,
+          status.configuration_generation,
+        );
+        if (sourceChanged) {
+          this.waterfallGeneration = null;
+          this.lastWaterfallBatchSequence = null;
+          this.lastWaterfallRowSequence = null;
+          this.spectrumTimes.length = 0;
+          this.waterfallTimes.length = 0;
+          this.waterfallBatchTimes.length = 0;
+        }
         if (status.amplitude_offset_db !== undefined)
           useDeviceStore.getState().set("amplitudeOffsetDb", status.amplitude_offset_db);
         const scale = status.waterfall_raw_scale_db;
         const offset = status.waterfall_raw_offset_dbm;
         const rowsPerSecond =
           status.waterfall_rows_per_second ?? status.waterfall_publish_fps;
+        const playbackState = status.playback?.state ?? "idle";
         useRuntimeStore
           .getState()
           .update({
@@ -183,10 +204,9 @@ export class WebSocketSpectrumSource {
             frequencyScan:
               status.frequency_scan ??
               useRuntimeStore.getState().frequencyScan,
-            configurationGeneration: Math.max(
-              status.configuration_generation,
-              useRuntimeStore.getState().configurationGeneration,
-            ),
+            playbackActive: playbackState !== "idle",
+            playbackState,
+            configurationGeneration: statusGeneration,
             waterfallRowsPerSecond: rowsPerSecond,
             waterfallRowsPerBatch:
               status.waterfall_rows_per_batch ??
