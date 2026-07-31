@@ -32,13 +32,10 @@ export function SpectrogramPanel() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const overlayDirty=useRef(true)
   const [error, setError] = useState<string>();
-  const center = useDeviceStore((s) => s.centerHz);
-  const span = useDeviceStore((s) => s.spanHz);
-  const frequencyRange=useRef(centerFrequencyRange(center,span))
-  useEffect(()=>{
-    frequencyRange.current=centerFrequencyRange(center,span)
-    overlayDirty.current=true
-  },[center,span])
+  const initialDevice=useDeviceStore.getState()
+  // The spectrogram mapping advances only with an accepted waterfall packet.
+  // HTTP/readback state must not relabel old-generation texture history.
+  const frequencyRange=useRef(centerFrequencyRange(initialDevice.centerHz,initialDevice.spanHz))
   useEffect(() => {
     const canvas = glRef.current;
     const overlay = overlayRef.current;

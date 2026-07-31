@@ -3,6 +3,7 @@ import type { PlaybackStatus } from './types/playback'
 
 export type AnalyzerSourceType = 'simulator' | 'san90' | 'playback'
 export type ToolMode = 'peak' | 'marker' | 'pan'
+export type PanPhase = 'off' | 'armed' | 'dragging' | 'tuning'
 export type SelectOption = { label: string; value: string }
 export type Marker = { bin: number; frequencyHz: number; amplitudeDbm: number }
 

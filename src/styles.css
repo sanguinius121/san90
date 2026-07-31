@@ -275,6 +275,38 @@ button {
   cursor: crosshair;
   touch-action: none;
 }
+.interactive.pan-tool {
+  cursor: grab;
+  user-select: none;
+}
+.interactive.pan-tool.is-pan-dragging {
+  cursor: grabbing;
+}
+.interactive.pan-tool.is-pan-tuning,
+.interactive.pan-tool[aria-disabled="true"] {
+  cursor: wait;
+}
+.spectrum-pan-overlay {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  left: 58px;
+  max-width: calc(100% - 126px);
+  padding: 4px 7px;
+  border: 1px solid rgba(66, 217, 255, 0.68);
+  background: rgba(8, 17, 23, 0.9);
+  color: #bcefff;
+  font: 600 var(--ui-font-9) "IBM Plex Mono";
+  letter-spacing: 0.2px;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spectrum-pan-overlay[data-mode="tuning"] {
+  border-color: #efbf56;
+  color: #ffd47b;
+}
 .plot-error {
   position: absolute;
   z-index: 5;
@@ -348,9 +380,13 @@ button {
 .tool-rail {
   display: grid;
   grid-template-rows: auto 1fr auto 18px;
+  width: var(--navigation-width);
+  min-width: 0;
+  max-width: var(--navigation-width);
   background: #171e25;
   border-right: 1px solid #40505b;
   min-height: 0;
+  overflow: hidden;
 }
 .rail-panel-tools {
   border-bottom: 1px solid #40505b;
@@ -382,8 +418,12 @@ button {
 .rail-tools {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 .rail-tools button {
+  width: 100%;
+  min-width: 0;
   height: 65px;
   border: 0;
   border-bottom: 1px solid #323f49;
@@ -395,6 +435,14 @@ button {
   gap: 6px;
   color: #8ca0ae;
   cursor: pointer;
+  overflow: hidden;
+}
+.rail-tools button > span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .rail-tools button span {
   font-size: var(--ui-font-9);
@@ -402,6 +450,23 @@ button {
 .rail-tools button:hover {
   background: #202b33;
   color: #d9e5ec;
+}
+.rail-tools button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.rail-tools button .rail-tool-state {
+  display: block;
+  max-width: calc(100% - 8px);
+  padding: 1px 4px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  color: currentColor;
+  font: 700 var(--ui-font-7) "IBM Plex Mono";
+  letter-spacing: 0.5px;
 }
 .rail-tools button.is-active {
   background: #24333d;
@@ -417,8 +482,14 @@ button {
   color: #718896;
   font: var(--ui-font-8) "IBM Plex Mono";
   border-top: 1px solid #35434d;
+  min-width: 0;
+  overflow: hidden;
 }
 .rail-state span {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-transform: uppercase;
 }
 .rail-state small {

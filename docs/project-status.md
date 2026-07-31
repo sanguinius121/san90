@@ -1,9 +1,9 @@
 # SAN-90 Spectrum Console — project status and handoff
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 Repository: `/home/tuancoi/san90`  
-Snapshot commit: `dc63492c9876708e5b726d8ed60d41197a0c61ab`
+Snapshot commit: `f9d1144`
 
 This document is the starting point for a new Codex session or a fresh
 development machine. Runtime values below are a verified baseline, not a
@@ -81,6 +81,20 @@ The following major features are implemented:
   starts collapsed and mounts its controls only when the operator expands it.
 - The left analysis rail exposes only Peak Search, Marker, and Pan. The
   non-functional Graph, Trace, and Zoom entries have been removed.
+- Spectrum Pan now follows the SAStudio interaction model. Pan is explicitly
+  armed from the analysis rail; pointer movement inside the shared plot
+  rectangle changes only a WebGL X-translation uniform and preview axis, while
+  the spectrogram continues on its verified mapping. A release over the 4 px
+  threshold performs one shared Center Frequency commit and stays `TUNING`
+  until the first packet with the verified center and new configuration
+  generation arrives. Escape, pointer cancel, scan/playback activation, and a
+  material plot resize cancel without tuning. AI/marker frequency annotations
+  are suppressed during drag and stale AI detections are cleared at commit.
+  The normal generation transition clears/reuses the same-size spectrogram
+  texture once; the visible interval remains five seconds. A short real-SAN-90
+  run verified left/right 10%-span tunes, browser hold/release/cancel,
+  recording CONFIG/pause output, scan/playback exclusion, 60 Hz recovery, and
+  unchanged zero acquisition errors/timeouts. See `docs/spectrum-pan.md`.
 - Version 1 of the application-owned `.san90rta` binary format, its sequential
   validating reader, dBm/frequency reconstruction, inspection/CSV CLI,
   sequential writer, safe `.part` finalization, and bounded recorder engine

@@ -30,6 +30,7 @@ export function AiAnnotationStrip() {
   const centerHz = useDeviceStore((state) => state.centerHz)
   const spanHz = useDeviceStore((state) => state.spanHz)
   const viewport = useDisplayStore((state) => state.viewport)
+  const panPhase = useDisplayStore((state) => state.panPhase)
   const [width, setWidth] = useState(1)
   const [range, setRange] = useState(() => ({
     startHz: initial?.startHz ?? centerHz - spanHz / 2,
@@ -66,8 +67,10 @@ export function AiAnnotationStrip() {
       const now = Date.now()
       setHeld((previous) => mergeHeldDetections(previous, result, now))
     })
+    const unsubscribeClear = aiDetections.subscribeClear(() => setHeld([]))
     return () => {
       unsubscribe()
+      unsubscribeClear()
     }
   }, [])
 
@@ -107,7 +110,11 @@ export function AiAnnotationStrip() {
             <rect x={rect.left} y={0} width={rect.width} height={height} />
           </clipPath>
         </defs>
-        <g clipPath={`url(#${clipId})`}>
+        <g
+          clipPath={`url(#${clipId})`}
+          opacity={panPhase === 'dragging' || panPhase === 'tuning' ? 0 : 1}
+          aria-hidden={panPhase === 'dragging' || panPhase === 'tuning'}
+        >
           {mapped.map((detection) => {
             const y = hasSecondLane ? 3 + detection.lane * 20 : 6
             const rangeWidth = Math.max(0.5, detection.xStop - detection.xStart)

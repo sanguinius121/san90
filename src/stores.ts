@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AnalyzerSourceType, ConnectionState, FrequencyScanStatus, Marker, ToolMode, Viewport } from './types'
+import type { AnalyzerSourceType, ConnectionState, FrequencyScanStatus, Marker, PanPhase, ToolMode, Viewport } from './types'
 import type { RfSwitchStatusApi } from './data/controlApi'
 import { DEFAULT_SPECTRUM_DYNAMIC_RANGE_DB, spectrumRangeForReferenceLevel } from './rendering/amplitudeScale'
 
@@ -22,16 +22,18 @@ export const useDeviceStore = create<DeviceState>((set) => ({
 }))
 
 interface DisplayState {
-  colormap: string; persistence: boolean; activeTool: ToolMode; viewport: Viewport; marker: Marker | null
+  colormap: string; persistence: boolean; activeTool: ToolMode; panPhase: PanPhase; viewport: Viewport; marker: Marker | null
   setTool: (tool: ToolMode) => void; setViewport: (viewport: Partial<Viewport>) => void; resetViewport: () => void
+  setPanPhase: (phase: PanPhase) => void
   setSpectrumReferenceLevel: (referenceLevelDbm: number) => void
   setMarker: (marker: Marker | null) => void; setPersistence: (enabled: boolean) => void
 }
 const defaultAmplitudeRange = spectrumRangeForReferenceLevel(-10, DEFAULT_SPECTRUM_DYNAMIC_RANGE_DB)
 const defaultViewport: Viewport = { start: 0, end: 1, ...defaultAmplitudeRange }
 export const useDisplayStore = create<DisplayState>((set) => ({
-  colormap: 'turbo', persistence: true, activeTool: 'marker', viewport: defaultViewport, marker: null,
+  colormap: 'turbo', persistence: true, activeTool: 'marker', panPhase: 'off', viewport: defaultViewport, marker: null,
   setTool: (activeTool) => set({ activeTool }), setViewport: (v) => set((s) => ({ viewport: { ...s.viewport, ...v } })),
+  setPanPhase: (panPhase) => set({ panPhase }),
   resetViewport: () => set((s) => ({ viewport: { ...s.viewport, start: 0, end: 1 } })),
   setSpectrumReferenceLevel: (referenceLevelDbm) => set((s) => {
     const dynamicRangeDb = s.viewport.maxDbm - s.viewport.minDbm

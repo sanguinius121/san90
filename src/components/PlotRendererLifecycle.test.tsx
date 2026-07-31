@@ -21,6 +21,8 @@ vi.mock('../rendering/SpectrumRenderer',async(importOriginal)=>{
     SpectrumRenderer:class {
       constructor(){lifecycle.spectrumCreated()}
       setFrame(){}
+      setPanOffsetPixels(){}
+      setPanDimmed(){}
       render(){}
       dispose(){lifecycle.spectrumDisposed()}
     },

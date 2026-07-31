@@ -2,6 +2,13 @@ import { createProgram } from "./webgl";
 import type { Viewport } from "../types";
 import { plotRectFramebuffer } from "./plotGeometry";
 
+export function spectrumPanPixelsToClip(
+  offsetPx: number,
+  plotWidthPx: number,
+) {
+  return plotWidthPx > 0 ? 2 * offsetPx / plotWidthPx : 0;
+}
+
 export function accumulateSpectrumIntervalMax(
   current: Float32Array | null,
   values: Float32Array,
@@ -41,6 +48,8 @@ export class SpectrumRenderer {
   private current: Float32Array | null = null;
   private intervalMax: Float32Array | null = null;
   private configurationGeneration: number | null = null;
+  private panOffsetClip = 0;
+  private panDimmed = false;
   constructor(private canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", { antialias: true, alpha: true });
     if (!gl) throw new Error("WebGL2 is required for the spectrum");
@@ -48,8 +57,8 @@ export class SpectrumRenderer {
     this.program = createProgram(
       gl,
       `#version 300 es
-      in float amplitude; uniform vec2 frequencyView; uniform vec2 amplitudeView; uniform float pointCount;
-      void main(){ float x=(float(gl_VertexID)+0.5)/max(1.0,pointCount); float px=(x-frequencyView.x)/(frequencyView.y-frequencyView.x)*2.0-1.0; float py=(amplitude-amplitudeView.x)/(amplitudeView.y-amplitudeView.x)*2.0-1.0; gl_Position=vec4(px,py,0,1); }`,
+      in float amplitude; uniform vec2 frequencyView; uniform vec2 amplitudeView; uniform float pointCount; uniform float panOffsetClip;
+      void main(){ float x=(float(gl_VertexID)+0.5)/max(1.0,pointCount); float px=(x-frequencyView.x)/(frequencyView.y-frequencyView.x)*2.0-1.0+panOffsetClip; float py=(amplitude-amplitudeView.x)/(amplitudeView.y-amplitudeView.x)*2.0-1.0; gl_Position=vec4(px,py,0,1); }`,
       `#version 300 es
       precision mediump float; uniform vec4 traceColor; out vec4 color; void main(){ color=traceColor; }`,
     );
@@ -64,6 +73,12 @@ export class SpectrumRenderer {
     const location = gl.getAttribLocation(this.program, "amplitude");
     gl.enableVertexAttribArray(location);
     gl.vertexAttribPointer(location, 1, gl.FLOAT, false, 0, 0);
+  }
+  setPanOffsetPixels(offsetPx: number, plotWidthPx: number) {
+    this.panOffsetClip = spectrumPanPixelsToClip(offsetPx, plotWidthPx);
+  }
+  setPanDimmed(dimmed: boolean) {
+    this.panDimmed = dimmed;
   }
   setFrame(
     values: Float32Array,
@@ -101,6 +116,7 @@ export class SpectrumRenderer {
     const frequencyView = gl.getUniformLocation(this.program, "frequencyView");
     const amplitudeView = gl.getUniformLocation(this.program, "amplitudeView");
     const pointCount = gl.getUniformLocation(this.program, "pointCount");
+    const panOffsetClip = gl.getUniformLocation(this.program, "panOffsetClip");
     const color = gl.getUniformLocation(this.program, "traceColor");
     const draw = (
       data: Float32Array,
@@ -111,7 +127,14 @@ export class SpectrumRenderer {
       gl.uniform2f(frequencyView, view.start, view.end);
       gl.uniform2f(amplitudeView, view.minDbm, view.maxDbm);
       gl.uniform1f(pointCount, data.length);
-      gl.uniform4f(color, ...rgba);
+      gl.uniform1f(panOffsetClip, this.panOffsetClip);
+      gl.uniform4f(
+        color,
+        rgba[0],
+        rgba[1],
+        rgba[2],
+        this.panDimmed ? rgba[3] * 0.45 : rgba[3],
+      );
       gl.drawArrays(gl.LINE_STRIP, 0, data.length);
     };
     if (persistence && this.intervalMax)

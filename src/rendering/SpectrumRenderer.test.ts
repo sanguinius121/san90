@@ -1,8 +1,13 @@
 import {describe,expect,it} from 'vitest'
-import {accumulateSpectrumIntervalMax,mergePendingSpectrum} from './SpectrumRenderer'
+import {accumulateSpectrumIntervalMax,mergePendingSpectrum,spectrumPanPixelsToClip} from './SpectrumRenderer'
 import {fixedRenderDecision} from './renderSchedule'
 
 describe('bounded spectrum temporal summary',()=>{
+  it('maps transient Pan pixels into plot-viewport clip coordinates',()=>{
+    expect(spectrumPanPixelsToClip(-100,1000)).toBeCloseTo(-0.2)
+    expect(spectrumPanPixelsToClip(100,1000)).toBeCloseTo(0.2)
+    expect(spectrumPanPixelsToClip(100,0)).toBe(0)
+  })
   it('retains peaks from every published trace until rendering',()=>{
     let summary:Float32Array|null=null
     summary=accumulateSpectrumIntervalMax(summary,new Float32Array([-90,-40,-80]))
