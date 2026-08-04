@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { recordingApi } from '../../data/recordingApi'
 import {
   bytesToUnit,
@@ -20,6 +20,7 @@ import type {
   RecordingState,
   RecordingStatus,
 } from '../../types/recording'
+import { useRfSidebarLocalization } from '../../data/rfSidebarLocalization'
 
 const ACTIVE_STATES: ReadonlySet<RecordingState> = new Set([
   'starting',
@@ -129,6 +130,8 @@ function stateLabel(state: RecordingState): string {
 }
 
 export function RecordControl({ disabled = false }: { disabled?: boolean }) {
+  const text=useRfSidebarLocalization('Record')
+  const common=useRfSidebarLocalization('Common')
   const [config, setConfig] = useState<RecordingConfig | null>(null)
   const [drafts, setDraftState] = useState<RecordingDrafts>(defaultDrafts)
   const draftsRef = useRef(drafts)
@@ -150,7 +153,7 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
   const startPending = useRef(false)
   const stopIssued = useRef(false)
 
-  const setDrafts = (
+  const setDrafts = useCallback((
     update: Partial<RecordingDrafts> | ((current: RecordingDrafts) => RecordingDrafts),
   ) => {
     const next =
@@ -159,9 +162,9 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
         : { ...draftsRef.current, ...update }
     draftsRef.current = next
     setDraftState(next)
-  }
+  }, [])
 
-  const applyVerifiedConfig = (verified: RecordingConfig) => {
+  const applyVerifiedConfig = useCallback((verified: RecordingConfig) => {
     setConfig(verified)
     const normalized = draftsFromConfig(verified)
     if (configInitialized.current) {
@@ -184,7 +187,7 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
       }
     }
     setDrafts(next)
-  }
+  }, [setDrafts])
 
   useEffect(() => {
     let mounted = true
@@ -204,7 +207,7 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [applyVerifiedConfig])
 
   useEffect(() => {
     let mounted = true
@@ -479,7 +482,7 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
           />
           <select
             aria-label={`${label} unit`}
-            title="Binary conversion: MB = 1,048,576 bytes; GB = 1,073,741,824 bytes"
+            title={text.language==='en'?'Binary conversion: MB = 1,048,576 bytes; GB = 1,073,741,824 bytes':text.hint('Binary conversion: MB = 1,048,576 bytes; GB = 1,073,741,824 bytes')}
             disabled={controlsDisabled}
             value={drafts[unitField]}
             onChange={event =>
@@ -491,14 +494,14 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
           </select>
         </span>
         <button
-          aria-label={`Decrease ${label}`}
+          aria-label={common.t('Decrease {control label}',{'control label':label})}
           disabled={controlsDisabled}
           onClick={() => adjustNumber(field, -step)}
         >
           −
         </button>
         <button
-          aria-label={`Increase ${label}`}
+          aria-label={common.t('Increase {control label}',{'control label':label})}
           disabled={controlsDisabled}
           onClick={() => adjustNumber(field, step)}
         >
@@ -511,32 +514,32 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
   return (
     <div className="record-control">
       <div className="control-row">
-        <label>Record</label>
-        <div className="record-switch" role="group" aria-label="Record">
+        <label>{text.t('Record')}</label>
+        <div className="record-switch" role="group" aria-label={text.t('Record')}>
           <button
-            aria-label="Start recording"
+            aria-label={text.t('Start recording')}
             aria-pressed={active}
             disabled={disabled || active || loading || saving}
             onClick={() => void start()}
           >
-            On
+            {text.t('On')}
           </button>
           <button
-            aria-label="Stop recording"
+            aria-label={text.t('Stop recording')}
             aria-pressed={!active}
             disabled={!active}
             onClick={() => void stop()}
           >
-            Off
+            {text.t('Off')}
           </button>
         </div>
       </div>
 
       <div className={`control-row ${controlsDisabled ? 'is-disabled' : ''}`}>
-        <label htmlFor="recording-mode">Record mode</label>
+        <label htmlFor="recording-mode">{text.t('Record mode')}</label>
         <select
           id="recording-mode"
-          aria-label="Record mode"
+          aria-label={text.t('Record mode')}
           disabled={controlsDisabled}
           value={drafts.mode}
           onChange={event => {
@@ -544,18 +547,18 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
             void commitDrafts({ mode })
           }}
         >
-          <option value="fixed">Fixed</option>
-          <option value="manual">Manual</option>
+          <option value="fixed">{text.t('Fixed')}</option>
+          <option value="manual">{text.t('Manual')}</option>
         </select>
       </div>
 
       <div className={`control-row ${controlsDisabled || drafts.mode === 'manual' ? 'is-disabled' : ''}`}>
-        <label htmlFor="recording-duration">Record time</label>
+        <label htmlFor="recording-duration">{text.t('Record time')}</label>
         <div className="record-byte-control">
           <span>
             <input
               id="recording-duration"
-              aria-label="Record time"
+              aria-label={text.t('Record time')}
               disabled={controlsDisabled || drafts.mode === 'manual'}
               inputMode="decimal"
               value={drafts.duration}
@@ -575,14 +578,14 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
             <em>s</em>
           </span>
           <button
-            aria-label="Decrease Record time"
+            aria-label={common.t('Decrease {control label}',{'control label':text.t('Record time')})}
             disabled={controlsDisabled || drafts.mode === 'manual'}
             onClick={() => adjustNumber('duration', -1)}
           >
             −
           </button>
           <button
-            aria-label="Increase Record time"
+            aria-label={common.t('Increase {control label}',{'control label':text.t('Record time')})}
             disabled={controlsDisabled || drafts.mode === 'manual'}
             onClick={() => adjustNumber('duration', 1)}
           >
@@ -591,15 +594,15 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
         </div>
       </div>
 
-      {byteField('fileSize', 'fileSizeUnit', 'File size limit', drafts.fileSizeUnit === 'GB' ? 1 : 100)}
-      {byteField('reserve', 'reserveUnit', 'Disk reserve', drafts.reserveUnit === 'GB' ? 1 : 100)}
+      {byteField('fileSize', 'fileSizeUnit', text.t('File size limit'), drafts.fileSizeUnit === 'GB' ? 1 : 100)}
+      {byteField('reserve', 'reserveUnit', text.t('Disk reserve'), drafts.reserveUnit === 'GB' ? 1 : 100)}
       <div className={`control-row ${controlsDisabled ? 'is-disabled' : ''}`}>
-        <label htmlFor="recording-outputDirectory">Output directory</label>
+        <label htmlFor="recording-outputDirectory">{text.t('Output directory')}</label>
         <div className="record-output-control">
           <input
             id="recording-outputDirectory"
-            aria-label="Output directory"
-            title="Relative to the backend recording root"
+            aria-label={text.t('Output directory')}
+            title={text.language==='en'?'Relative to the backend recording root':text.hint('Output directory')}
             disabled={controlsDisabled}
             value={drafts.outputDirectory}
             onFocus={() => editing.current.add('outputDirectory')}
@@ -614,8 +617,8 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
             }}
           />
           <button
-            aria-label="Choose output directory"
-            title="Choose a folder below the recording root"
+            aria-label={text.t('Choose output directory')}
+            title={text.language==='en'?'Choose a folder below the recording root':text.hint('Choose output directory')}
             disabled={controlsDisabled}
             onMouseDown={event => event.preventDefault()}
             onClick={() => void openDirectoryPicker()}
@@ -628,15 +631,15 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
         <div
           className="record-directory-picker"
           role="dialog"
-          aria-label="Choose recording directory"
+          aria-label={text.t('Choose recording directory')}
         >
           <div className="record-directory-picker__heading">
             <b>{directoryRootName}</b>
-            <button aria-label="Close directory picker" onClick={() => setPickerOpen(false)}>
+            <button aria-label={text.t('Close directory picker')} onClick={() => setPickerOpen(false)}>
               ×
             </button>
           </div>
-          <div className="record-directory-list" role="listbox" aria-label="Recording directories">
+          <div className="record-directory-list" role="listbox" aria-label={text.t('Recording directories')}>
             {directories.map(directory => (
               <button
                 key={directory}
@@ -645,14 +648,14 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
                 disabled={directoryLoading}
                 onClick={() => void chooseDirectory(directory)}
               >
-                {directory === '.' ? 'Default root' : directory}
+                {directory === '.' ? text.t('Default root') : directory}
               </button>
             ))}
-            {!directoryLoading && directories.length === 0 && <span>No directories found</span>}
+            {!directoryLoading && directories.length === 0 && <span>{text.t('No directories found')}</span>}
           </div>
           <div className="record-directory-create">
             <input
-              aria-label="New recording directory"
+              aria-label={text.t('New recording directory')}
               placeholder="field-tests/session-01"
               disabled={directoryLoading}
               value={newDirectory}
@@ -662,21 +665,21 @@ export function RecordControl({ disabled = false }: { disabled?: boolean }) {
               }}
             />
             <button
-              aria-label="Create recording directory"
+              aria-label={text.t('Create recording directory')}
               disabled={directoryLoading}
               onClick={() => void createDirectory()}
             >
-              Create
+              {text.t('Create')}
             </button>
           </div>
-          {directoryLoading && <span className="record-save-state">Loading directories…</span>}
+          {directoryLoading && <span className="record-save-state">{text.t('Loading directories…')}</span>}
           {directoryError && <div className="record-error" aria-live="polite">{directoryError}</div>}
         </div>
       )}
-      {textField('filePrefix', 'File prefix')}
+      {textField('filePrefix', text.t('File prefix'))}
 
       <div className={`record-disk ${diskNearReserve ? 'is-warning' : ''}`}>
-        <span>Disk capacity</span>
+        <span>{text.t('Disk capacity')}</span>
         <b>
           {formatBytes(status?.available_disk_bytes ?? null)} available /{' '}
           {formatBytes(status?.total_disk_bytes ?? null)} total

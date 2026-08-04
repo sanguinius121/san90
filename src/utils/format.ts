@@ -6,3 +6,9 @@ export const formatFrequency = (hz: number, precision = 4) => {
 }
 export const shortFrequency = (hz: number) => hz >= 1e9 ? `${(hz / 1e9).toFixed(3)}G` : hz >= 1e6 ? `${(hz / 1e6).toFixed(3)}M` : `${(hz / 1e3).toFixed(1)}k`
 export const formatDuration = (ms: number) => ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms.toFixed(0)}ms`
+
+const twoDigits=(value:number)=>String(value).padStart(2,"0")
+
+export function formatHeaderDateTime(value:Date):string {
+  return `${twoDigits(value.getHours())}:${twoDigits(value.getMinutes())}:${twoDigits(value.getSeconds())}, Ngày ${twoDigits(value.getDate())}, Tháng ${value.getMonth()+1}, Năm ${value.getFullYear()}`
+}

@@ -53,6 +53,14 @@ The following major features are implemented:
 - Recoverable IF-overflow warning.
 - FT232H RF-path selection with fail-safe RF8 initialization and reconnect.
 - Bounded 640×640 GRAY8 ZeroMQ image output for an external AI service.
+- The standalone GRAY8 dataset receiver keeps its original PNG plus metadata
+  JSON behavior by default and offers an opt-in `--auto-labelme` mode. The mode
+  estimates a per-frequency-column noise floor, emits human-reviewable
+  rectangle candidates above a configurable relative dB threshold, and keeps
+  the original transport metadata in a `.meta.json` sidecar. It does not alter
+  the port-5557 stream or assign final training labels automatically. Every
+  disconnected emission is boxed as an individual burst; frequency-aligned
+  FHSS pulses are not merged across empty time intervals.
 - A bounded port-5558 AI-result subscriber and compact, frequency-aligned
   current-detection strip between the spectrogram and spectrum.
 - The desktop measurement/right-sidebar boundary is a 6 px accessible vertical
@@ -79,6 +87,13 @@ The following major features are implemented:
 - The RF sidebar follows the workflow order Frequency, Frequency Scan,
   RF Path, Amplitude, Bandwidth, Detection, Record, and Playback. Every section
   starts collapsed and mounts its controls only when the operator expands it.
+- The header exposes a frontend-only `ENG`/`VIỆT` language preference stored as
+  `san90.ui.language`. English preserves the existing RF sidebar text.
+  Vietnamese RF-sidebar labels and hover hints are parsed from
+  `docs/rf-sidebar-localization-worksheet.md` with section-scoped keys: blank
+  translations preserve the source term and blank suggestions create no hint.
+  Language changes do not remount either plot renderer or send analyzer
+  commands.
 - The left analysis rail exposes only Peak Search, Marker, and Pan. The
   non-functional Graph, Trace, and Zoom entries have been removed.
 - Spectrum Pan now follows the SAStudio interaction model. Pan is explicitly

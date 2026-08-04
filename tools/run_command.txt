@@ -1,0 +1,7 @@
+cd /home/tuancoi/san90
+
+python3 tools/ai_gray8_receiver.py \
+  --connect tcp://127.0.0.1:5557 \
+  --save-dir /home/tuancoi/label_dataset/DJI \
+  --save-every 1 \
+  --stop-after 200

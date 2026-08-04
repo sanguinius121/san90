@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useRfSidebarLocalization } from '../../data/rfSidebarLocalization'
 type CommitResult = number | false | void
 interface NumericControlProps {
   label: string
@@ -18,6 +19,7 @@ interface NumericControlProps {
   convertUnitValue?: (value: number, fromUnit: string, toUnit: string) => number
   validateValue?: (value: number) => boolean
   onInvalid?: () => void
+  hint?: string
 }
 const formatValue=(value:number,precision:number)=>String(Number(value.toFixed(precision)))
 export function NumericControl({
@@ -38,7 +40,9 @@ export function NumericControl({
   convertUnitValue,
   validateValue,
   onInvalid,
+  hint,
 }: NumericControlProps) {
+  const common=useRfSidebarLocalization('Common')
   const [draft,setDraft]=useState(formatValue(value,precision)); const editing=useRef(false); const focused=useRef(false); const pending=useRef(false); const timer=useRef<number|undefined>(undefined)
   useEffect(()=>{if(!editing.current&&!focused.current&&!pending.current)setDraft(formatValue(value,precision))},[value,resetToken,precision])
   useEffect(()=>()=>window.clearTimeout(timer.current),[])
@@ -77,9 +81,9 @@ export function NumericControl({
     if(convertUnitValue)setDraft(formatValue(convertUnitValue(sourceValue,unit,nextUnit),unitPrecisions?.[nextUnit]??precision))
     onUnitChange?.(nextUnit)
   }
-  return <div className={`control-row ${disabled ? 'is-disabled' : ''}`}>
+  return <div className={`control-row ${disabled ? 'is-disabled' : ''}`} title={hint}>
     <label>{label}</label><div className="numeric-control"><span><input aria-label={label} disabled={disabled} value={draft} onChange={event=>typed(event.target.value)} onFocus={()=>{focused.current=true}} onBlur={()=>{focused.current=false;if(editing.current)commit();else setDraft(formatValue(value,precision))}} onKeyDown={event=>{if(event.key==='Enter')commit();if(event.key==='Escape'){clearPending();editing.current=false;setDraft(formatValue(value,precision))}}}/>{unitOptions?<select className="numeric-unit-select" aria-label={`${label} unit`} disabled={disabled} value={unit} onChange={event=>selectUnit(event.target.value)}>{unitOptions.map(option=><option key={option} value={option}>{option}</option>)}</select>:<em>{unit}</em>}</span>
-      <button aria-label={`Decrease ${label}`} disabled={disabled} onClick={()=>change(draftValue()-step)}>−</button><button aria-label={`Increase ${label}`} disabled={disabled} onClick={()=>change(draftValue()+step)}>+</button>
+      <button aria-label={common.t('Decrease {control label}',{'control label':label})} disabled={disabled} onClick={()=>change(draftValue()-step)}>−</button><button aria-label={common.t('Increase {control label}',{'control label':label})} disabled={disabled} onClick={()=>change(draftValue()+step)}>+</button>
     </div>
   </div>
 }

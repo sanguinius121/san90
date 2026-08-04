@@ -32,6 +32,7 @@ export function SpectrogramPanel() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const overlayDirty=useRef(true)
   const [error, setError] = useState<string>();
+  const centerHz=useDeviceStore((state)=>state.centerHz)
   const initialDevice=useDeviceStore.getState()
   // The spectrogram mapping advances only with an accepted waterfall packet.
   // HTTP/readback state must not relabel old-generation texture history.
@@ -214,9 +215,11 @@ export function SpectrogramPanel() {
     <section className="plot-panel spectrogram-panel">
       <header className="plot-header">
         <div>
-          <span className="plot-title">SPECTROGRAM</span>
-          <span className="plot-subtitle">REAL-TIME WATERFALL</span>
+          <span className="plot-title">PHỔ THÁC NƯỚC THỜI GIAN THỰC</span>
         </div>
+        <span className="spectrogram-center-frequency">
+          Tần số trung tâm: {(centerHz/1e6).toFixed(2)} MHz
+        </span>
         <ColorScale />
       </header>
       <div className="plot-stage">

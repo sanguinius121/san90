@@ -56,23 +56,34 @@ button {
 .product {
   display: flex;
   align-items: center;
-  gap: 10px;
+  align-self: stretch;
+  gap: 13px;
 }
 .product-mark {
-  font: 700 var(--ui-font-15) "IBM Plex Mono";
+  display: inline-grid;
+  place-items: center;
+  min-width: 82px;
+  height: 42px;
+  padding: 0 10px;
+  font: 700 18px "IBM Plex Mono";
   color: #031117;
   background: var(--cyan);
-  padding: 5px 7px;
-  letter-spacing: -1px;
+  letter-spacing: 0.2px;
 }
 .product div,
 .sidebar-title div {
   display: flex;
   flex-direction: column;
 }
+.product .product-title {
+  justify-content: center;
+  height: 100%;
+}
 .product b {
-  font-size: var(--ui-font-12);
-  letter-spacing: 1.5px;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: 1.25px;
+  white-space: nowrap;
 }
 .product small,
 .sidebar-title span {
@@ -97,6 +108,11 @@ button {
   border-left: 1px solid #35424c;
   padding-left: 12px;
 }
+.session .session-primary-metric {
+  color: #b9d8e8;
+  font: 600 var(--ui-font-12) "IBM Plex Mono";
+  letter-spacing: 0.25px;
+}
 .status-indicator {
   width: 7px;
   height: 7px;
@@ -107,8 +123,27 @@ button {
   background: #ff5b56;
 }
 .app-header time {
-  font: var(--ui-font-10) "IBM Plex Mono";
-  color: #758997;
+  color: #fff;
+  font: 500 var(--ui-font-12) "IBM Plex Mono";
+  letter-spacing: 0.15px;
+  white-space: nowrap;
+}
+.header-language {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #c4d4de;
+  font: 500 var(--ui-font-10) "IBM Plex Mono";
+  white-space: nowrap;
+}
+.header-language select {
+  width: 76px;
+  height: 28px;
+  border: 1px solid #63727d;
+  background: #e8edf0;
+  color: #172027;
+  padding: 0 5px;
+  cursor: pointer;
 }
 .app-grid {
   --right-dock-width: 418px;
@@ -169,6 +204,7 @@ button {
   grid-template-rows: minmax(0, 1fr) 31px;
 }
 .plot-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -254,6 +290,25 @@ button {
 .plot-subtitle {
   font: var(--ui-font-9) "IBM Plex Mono";
   color: #567080;
+}
+.spectrogram-center-frequency {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  max-width: 48%;
+  padding: 0 8px;
+  overflow: hidden;
+  transform: translate(-50%, -50%);
+  background: #151c22;
+  color: #eaf6fc;
+  font: 600 clamp(13px, 1.05vw, 18px) "IBM Plex Mono";
+  letter-spacing: 0.35px;
+  line-height: 25px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .plot-stage {
   position: relative;
@@ -360,16 +415,17 @@ button {
 .rf-path-status{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;border-top:1px solid #33434e;margin-top:4px;padding-top:5px;font:var(--ui-font-8) "IBM Plex Mono"}.rf-path-status span{display:flex;flex-direction:column;gap:2px}.rf-path-status i{font-style:normal;color:#718794}.rf-path-status b{font-weight:500;color:#d6e3ea}.rf-path-status span:last-child{grid-column:1/-1;display:block;padding:3px 5px;border-left:2px solid #5b6871;color:#91a1aa;background:#20282e}.rf-path-status span.is-connected{border-color:#42d891;color:#70e5aa}.rf-path-status span.is-unavailable{border-color:#a86938;color:#d6a26d}.rf-lna-badge{display:inline-block;margin-top:5px;padding:3px 5px;border:1px solid #2f9f78;background:#17372d;color:#62e8ad;font:700 var(--ui-font-8) "IBM Plex Mono"}.rf-path-note{margin:5px 0 0;color:#9caeb8;font:var(--ui-font-8)/1.45 "IBM Plex Mono"}.rf-path-warning{margin-top:5px;padding:5px;border-left:2px solid #dc7449;background:#38241d;color:#ffb394;font:var(--ui-font-8)/1.4 "IBM Plex Mono"}
 .spectrum-status {
   display: grid;
-  grid-template-columns: 1.25fr 1.15fr 0.9fr 0.9fr 0.55fr 1fr 1fr 0.65fr;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
   padding: 0 9px;
   background: #12191f;
   border-top: 1px solid #33434e;
-  font: var(--ui-font-9) "IBM Plex Mono";
+  font: 500 var(--ui-font-12) "IBM Plex Mono";
   color: #bdcbd4;
 }
 .spectrum-status span {
   display: flex;
+  justify-content: center;
   gap: 6px;
   white-space: nowrap;
 }
@@ -516,6 +572,18 @@ button {
 .sidebar-title b {
   font-size: var(--ui-font-11);
   letter-spacing: 0.9px;
+}
+.control-sidebar:not(.ai-preview-sidebar) .sidebar-title b {
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: 0.6px;
+  text-align: left;
+}
+.ai-preview-sidebar .sidebar-title b {
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: 0.6px;
+  text-align: left;
 }
 .sidebar-title .live-dot {
   color: #4fe6a0;
@@ -1296,9 +1364,6 @@ button {
   }
   .right-dock-splitter {
     pointer-events: none;
-  }
-  .session i:nth-last-child(-n + 2) {
-    display: none;
   }
 }
 @media (max-height: 760px) {

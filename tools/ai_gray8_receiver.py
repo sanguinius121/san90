@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
+import math
 import sys
 import time
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
@@ -16,7 +19,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from backend.ai_stream.protocol import validate_multipart
 
 
-def parse_args() -> argparse.Namespace:
+def _parse_bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError("expected true or false")
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--connect", default="tcp://127.0.0.1:5557")
     parser.add_argument("--save-dir", type=Path)
@@ -24,25 +36,230 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-files", type=int, default=20)
     parser.add_argument("--stop-after", type=int, help="Exit after receiving N valid images")
     parser.add_argument("--display", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--auto-labelme",
+        nargs="?",
+        const=True,
+        default=False,
+        type=_parse_bool,
+        metavar="BOOL",
+        help="Write automatic LabelMe rectangle candidates (default: false)",
+    )
+    parser.add_argument(
+        "--threshold-db",
+        type=float,
+        default=6.0,
+        help="Signal threshold in dB above the per-frequency noise floor (default: 6)",
+    )
+    parser.add_argument(
+        "--auto-label",
+        default="AUTO_CANDIDATE",
+        help="Placeholder label for automatic rectangles (default: AUTO_CANDIDATE)",
+    )
+    args = parser.parse_args(argv)
     if args.save_every < 1 or args.max_files < 1:
         parser.error("--save-every and --max-files must be positive")
     if args.stop_after is not None and args.stop_after < 1:
         parser.error("--stop-after must be positive")
+    if not math.isfinite(args.threshold_db) or args.threshold_db <= 0:
+        parser.error("--threshold-db must be finite and positive")
+    if not args.auto_label.strip():
+        parser.error("--auto-label must not be empty")
     return args
 
 
-def save_preview(directory: Path, image: np.ndarray, metadata: dict[str, object], max_files: int) -> None:
+def _connected_components(mask: np.ndarray) -> list[tuple[int, int, int, int, int]]:
+    """Return sparse 8-connected components as x0, y0, x1, y1, area."""
+    height, width = mask.shape
+    visited = np.zeros(mask.shape, dtype=np.bool_)
+    components: list[tuple[int, int, int, int, int]] = []
+    for start_y, start_x in np.argwhere(mask):
+        y = int(start_y)
+        x = int(start_x)
+        if visited[y, x]:
+            continue
+        visited[y, x] = True
+        pending = deque([(x, y)])
+        min_x = max_x = x
+        min_y = max_y = y
+        area = 0
+        while pending:
+            current_x, current_y = pending.popleft()
+            area += 1
+            min_x = min(min_x, current_x)
+            max_x = max(max_x, current_x)
+            min_y = min(min_y, current_y)
+            max_y = max(max_y, current_y)
+            for neighbor_y in range(max(0, current_y - 1), min(height, current_y + 2)):
+                for neighbor_x in range(max(0, current_x - 1), min(width, current_x + 2)):
+                    if mask[neighbor_y, neighbor_x] and not visited[neighbor_y, neighbor_x]:
+                        visited[neighbor_y, neighbor_x] = True
+                        pending.append((neighbor_x, neighbor_y))
+        components.append((min_x, min_y, max_x + 1, max_y + 1, area))
+    return components
+
+
+def detect_candidate_boxes(
+    image: np.ndarray,
+    metadata: dict[str, object],
+    *,
+    threshold_db: float,
+    padding: int = 4,
+) -> list[tuple[int, int, int, int]]:
+    """Detect frequency/time regions above a column-local noise floor.
+
+    The GRAY8 protocol has a linear dB mapping, so subtracting each column's
+    15th percentile in code space is equivalent to a relative dB threshold.
+    Every disconnected emission is retained as an individual burst candidate;
+    separate pulses are never joined merely because they share a frequency.
+    The result is deliberately a candidate set for human labeling.
+    """
+    if image.ndim != 2 or image.dtype != np.uint8:
+        raise ValueError("auto LabelMe detection requires a 2-D uint8 image")
+    db_per_gray_level = float(metadata["db_per_gray_level"])
+    if not math.isfinite(db_per_gray_level) or db_per_gray_level <= 0:
+        raise ValueError("metadata db_per_gray_level must be finite and positive")
+    threshold_codes = threshold_db / db_per_gray_level
+    noise_codes = np.percentile(image, 15.0, axis=0)
+    raw_mask = image.astype(np.float32) >= noise_codes[np.newaxis, :] + threshold_codes
+
+    # Remove isolated one-pixel noise while retaining short horizontal pulses.
+    padded = np.pad(raw_mask, 1, mode="constant", constant_values=False)
+    neighbor_count = np.zeros(raw_mask.shape, dtype=np.uint8)
+    for y_offset in range(3):
+        for x_offset in range(3):
+            neighbor_count += padded[
+                y_offset : y_offset + raw_mask.shape[0],
+                x_offset : x_offset + raw_mask.shape[1],
+            ]
+    mask = raw_mask & (neighbor_count >= 2)
+    height, width = mask.shape
+
+    boxes: list[tuple[int, int, int, int]] = []
+    for x0, y0, x1, y1, area in _connected_components(mask):
+        # Short FHSS bursts may be only one or two rows high. Requiring both a
+        # modest horizontal extent and area rejects isolated noise while
+        # retaining those valid individual emissions.
+        if area >= 6 and x1 - x0 >= 4:
+            boxes.append((x0, y0, x1, y1))
+    boxes = _merge_same_burst_fragments(boxes)
+
+    padded_boxes = {
+        (
+            max(0, x0 - padding),
+            max(0, y0 - padding),
+            min(width, x1 + padding),
+            min(height, y1 + padding),
+        )
+        for x0, y0, x1, y1 in boxes
+    }
+    return sorted(padded_boxes, key=lambda box: (box[1], box[0], box[3], box[2]))
+
+
+def _merge_same_burst_fragments(
+    boxes: Sequence[tuple[int, int, int, int]],
+    *,
+    maximum_empty_gap: int = 2,
+) -> list[tuple[int, int, int, int]]:
+    """Join threshold-fragmented pieces without bridging separate time bursts."""
+    merged = list(boxes)
+    changed = True
+    while changed:
+        changed = False
+        result: list[tuple[int, int, int, int]] = []
+        while merged:
+            current = merged.pop()
+            for index, other in enumerate(merged):
+                horizontal_gap = max(0, max(current[0], other[0]) - min(current[2], other[2]))
+                vertical_gap = max(0, max(current[1], other[1]) - min(current[3], other[3]))
+                overlaps_in_time = current[1] < other[3] and other[1] < current[3]
+                overlaps_in_frequency = current[0] < other[2] and other[0] < current[2]
+                if (overlaps_in_time and horizontal_gap <= maximum_empty_gap) or (
+                    overlaps_in_frequency and vertical_gap <= maximum_empty_gap
+                ):
+                    current = (
+                        min(current[0], other[0]),
+                        min(current[1], other[1]),
+                        max(current[2], other[2]),
+                        max(current[3], other[3]),
+                    )
+                    merged.pop(index)
+                    changed = True
+                    break
+            result.append(current)
+        merged = result
+    return merged
+
+
+def build_labelme_document(
+    image_path: str,
+    image: np.ndarray,
+    boxes: Sequence[tuple[int, int, int, int]],
+    *,
+    label: str,
+    threshold_db: float,
+) -> dict[str, object]:
+    height, width = image.shape
+    return {
+        "version": "7.0.4",
+        "flags": {"san90_auto_generated": True},
+        "shapes": [
+            {
+                "label": label,
+                "points": [[float(x0), float(y0)], [float(x1), float(y1)]],
+                "group_id": None,
+                "description": f"Auto-generated at {threshold_db:g} dB above the local noise floor",
+                "shape_type": "rectangle",
+                "flags": {"auto_generated": True},
+                "mask": None,
+            }
+            for x0, y0, x1, y1 in boxes
+        ],
+        "imagePath": image_path,
+        "imageData": None,
+        "imageHeight": height,
+        "imageWidth": width,
+    }
+
+
+def save_preview(
+    directory: Path,
+    image: np.ndarray,
+    metadata: dict[str, object],
+    max_files: int,
+    *,
+    auto_labelme: bool = False,
+    threshold_db: float = 6.0,
+    auto_label: str = "AUTO_CANDIDATE",
+) -> None:
     from PIL import Image
 
     directory.mkdir(parents=True, exist_ok=True)
     stem = f"received_san90_gray8_{int(metadata['sequence']):012d}_{int(metadata['timestamp_ns'])}"
-    Image.fromarray(image, mode="L").save(directory / f"{stem}.png", format="PNG")
-    (directory / f"{stem}.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    image_path = directory / f"{stem}.png"
+    json_path = directory / f"{stem}.json"
+    Image.fromarray(image, mode="L").save(image_path, format="PNG")
+    if auto_labelme:
+        boxes = detect_candidate_boxes(image, metadata, threshold_db=threshold_db)
+        labelme = build_labelme_document(
+            image_path.name,
+            image,
+            boxes,
+            label=auto_label,
+            threshold_db=threshold_db,
+        )
+        json_path.write_text(json.dumps(labelme, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        json_path.with_suffix(".meta.json").write_text(
+            json.dumps(metadata, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    else:
+        json_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     files = sorted(directory.glob("received_san90_gray8_*.png"), key=lambda path: path.stat().st_mtime_ns)
     for path in files[:-max_files]:
         path.unlink(missing_ok=True)
         path.with_suffix(".json").unlink(missing_ok=True)
+        path.with_suffix(".meta.json").unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -80,7 +297,15 @@ def main() -> int:
                 continue
             received += 1
             if args.save_dir is not None and received % args.save_every == 0:
-                save_preview(args.save_dir, image, metadata, args.max_files)
+                save_preview(
+                    args.save_dir,
+                    image,
+                    metadata,
+                    args.max_files,
+                    auto_labelme=args.auto_labelme,
+                    threshold_db=args.threshold_db,
+                    auto_label=args.auto_label,
+                )
             if args.stop_after is not None and received >= args.stop_after:
                 print(f"Received {received} valid images; stopping.")
                 break

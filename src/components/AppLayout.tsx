@@ -3,31 +3,35 @@ import { SpectrumPanel } from "./SpectrumPanel";
 import { AiAnnotationStrip } from "./AiAnnotationStrip";
 import { ToolRail, type DockPanel } from "./ToolRail";
 import { ControlSidebar } from "./ControlSidebar";
-import { useRef, useState } from "react";
-import { useRuntimeStore } from "../stores";
+import { useEffect, useRef, useState } from "react";
+import { useRuntimeStore, useUiPreferencesStore } from "../stores";
 import { RightDockSplitter } from "./layout/RightDockSplitter";
 import { useResizableRightDock } from "../hooks/useResizableRightDock";
 import { AiPreviewSidebar } from "./AiPreviewSidebar";
+import { formatHeaderDateTime } from "../utils/format";
+import type { UiLanguage } from "../data/uiLanguage";
 
 export function AppLayout() {
   const gridRef = useRef<HTMLElement>(null);
   const [dockPanel, setDockPanel] = useState<DockPanel>("rf");
+  const [now,setNow]=useState(()=>new Date())
+  const language=useUiPreferencesStore((state)=>state.language)
+  const setLanguage=useUiPreferencesStore((state)=>state.setLanguage)
   const rightDock = useResizableRightDock(gridRef);
   const runtime = useRuntimeStore();
   const {
-    fps,
-    waterfallFps,
-    waterfallBatchFps,
-    webglFps,
-    spectrogramFps,
-    droppedFrames: dropped,
     connection: state,
     source,
-    pointCount,
-    sdkFps,
-    replacedSnapshots,
+    spectrogramFps,
     tracesPerWaterfallRow,
   } = runtime;
+  useEffect(()=>{
+    const timer=window.setInterval(()=>setNow(new Date()),1000)
+    return ()=>window.clearInterval(timer)
+  },[])
+  useEffect(()=>{
+    document.documentElement.lang=language
+  },[language])
   const selectSource = (value: string) => {
     const url = new URL(location.href);
     url.searchParams.set("source", value);
@@ -80,10 +84,9 @@ export function AppLayout() {
     >
       <header className="app-header">
         <div className="product">
-          <span className="product-mark">S90</span>
-          <div>
-            <b>SPECTRUM CONSOLE</b>
-            <small>REAL-TIME RF ANALYSIS</small>
+          <span className="product-mark">PTL-26</span>
+          <div className="product-title">
+            <b>GIÁM SÁT VÔ TUYẾN</b>
           </div>
         </div>
         <div className="session">
@@ -103,38 +106,33 @@ export function AppLayout() {
             <option value="simulator">Simulator</option>
             <option value="san90">SAN-90</option>
           </select>
-          <i>{pointCount} PTS</i>
-          <i>
-            S {fps} / W {waterfallFps} ROW/s
-          </i>
-          <i>
-            GL S {webglFps} / W {spectrogramFps} FPS
-          </i>
-          <i>{waterfallBatchFps} BATCH/s</i>
           {source === "san90" && (
             <>
-              <i>{sdkFps.toFixed(0)} SDK FPS</i>
+              <i className="session-primary-metric">{spectrogramFps.toFixed(0)} SPECTROGRAM FPS</i>
               {tracesPerWaterfallRow != null && (
-                <i>{tracesPerWaterfallRow.toFixed(1)} TRACE/ROW</i>
+                <i className="session-primary-metric">{tracesPerWaterfallRow.toFixed(1)} TRACE/ROW</i>
               )}
-              <i>{replacedSnapshots} REPLACED</i>
               <button
                 onClick={() => command(state === "stopped" ? "start" : "stop")}
               >
-                {state === "stopped" ? "START" : "STOP"}
+                {state === "stopped" ? "START" : "DỪNG"}
               </button>
-              <button onClick={() => command("reconnect")}>RECONNECT</button>
+              <button onClick={() => command("reconnect")}>KẾT NỐI LẠI</button>
             </>
           )}
-          <i>{dropped} INVALID</i>
         </div>
-        <time>
-          {new Date().toLocaleDateString(undefined, {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-          })}
-        </time>
+        <div className="header-language">
+          <label htmlFor="ui-language">Ngôn ngữ/Language</label>
+          <select
+            id="ui-language"
+            value={language}
+            onChange={(event)=>setLanguage(event.target.value as UiLanguage)}
+          >
+            <option value="en">ENG</option>
+            <option value="vi">VIỆT</option>
+          </select>
+        </div>
+        <time dateTime={now.toISOString()}>{formatHeaderDateTime(now)}</time>
       </header>
       <main className="app-grid" ref={gridRef}>
         <div className="measurement-area">

@@ -102,10 +102,23 @@ If a downstream adapter needs three channels it may use `np.repeat(image[:, :, N
 python3 tools/ai_gray8_receiver.py
 python3 tools/ai_gray8_receiver.py --save-dir ./received_preview --save-every 10 --max-files 20
 python3 tools/ai_gray8_receiver.py --save-dir ./received_preview --save-every 1 --max-files 200 --stop-after 200
+python3 tools/ai_gray8_receiver.py --save-dir ./received_preview --save-every 1 --max-files 200 --stop-after 200 --auto-labelme --threshold-db 6 --auto-label AUTO_CANDIDATE
 python3 tools/ai_gray8_receiver.py --display  # optional OpenCV
 ```
 
 The receiver validates metadata/payloads, reports rates/statistics, and skips malformed messages. Saved PNGs are lossless grayscale mode `L` with matching JSON. `--stop-after` counts valid received images and exits cleanly after the requested count.
+
+Automatic LabelMe candidates are opt-in. Without `--auto-labelme`, the saved
+PNG and metadata JSON behavior is unchanged. With it enabled, the receiver
+estimates the noise floor at the 15th percentile independently for every
+frequency column, retains
+regions at least `--threshold-db` above that floor, and writes rectangle shapes
+using the placeholder from `--auto-label`. The LabelMe annotation uses the
+normal `.json` filename and the original transport metadata is preserved as
+`.meta.json`. Wide connected emissions and repeated narrow pulses aligned at
+one frequency are supported as separate burst boxes; disconnected pulses are
+never joined across empty time intervals. Labels remain candidates for human
+review.
 
 `AI_PREVIEW_ENABLED=true` still enables the optional rotating diagnostic files.
 At most one PNG/JSON pair per interval is written and old pairs rotate out.

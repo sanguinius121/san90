@@ -2,6 +2,20 @@ import { create } from 'zustand'
 import type { AnalyzerSourceType, ConnectionState, FrequencyScanStatus, Marker, PanPhase, ToolMode, Viewport } from './types'
 import type { RfSwitchStatusApi } from './data/controlApi'
 import { DEFAULT_SPECTRUM_DYNAMIC_RANGE_DB, spectrumRangeForReferenceLevel } from './rendering/amplitudeScale'
+import { persistUiLanguage, readStoredUiLanguage, type UiLanguage } from './data/uiLanguage'
+
+interface UiPreferencesState {
+  language: UiLanguage
+  setLanguage: (language: UiLanguage) => void
+}
+
+export const useUiPreferencesStore = create<UiPreferencesState>((set) => ({
+  language: readStoredUiLanguage(),
+  setLanguage: (language) => {
+    persistUiLanguage(language)
+    set({ language })
+  },
+}))
 
 interface DeviceState {
   centerHz: number; stepHz: number; spanHz: number

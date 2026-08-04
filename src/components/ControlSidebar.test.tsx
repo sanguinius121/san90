@@ -3,7 +3,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ControlSidebar } from './ControlSidebar'
-import { useDeviceStore, useRuntimeStore } from '../stores'
+import { useDeviceStore, useRuntimeStore, useUiPreferencesStore } from '../stores'
 import type { AnalyzerSettingsApi } from '../data/controlApi'
 import canonicalSteps from '../../config/san90-resolution-tradeoff.json'
 
@@ -104,6 +104,7 @@ function json(body: unknown, status = 200) {
 }
 
 beforeEach(() => {
+  useUiPreferencesStore.setState({language:'en'})
   useRuntimeStore.setState({
     source: 'san90',
     reconfiguring: false,
@@ -120,6 +121,27 @@ afterEach(() => {
 })
 
 describe('ControlSidebar hardware controls', () => {
+  it('uses worksheet translations and Vietnamese hints only in VIỆT mode', () => {
+    useRuntimeStore.setState({source:'simulator'})
+    vi.stubGlobal('fetch',vi.fn(()=>json({},404)))
+    render(<ControlSidebar defaultSectionsOpen />)
+
+    const englishCenter=screen.getByLabelText('Center frequency')
+    expect(englishCenter.closest('.control-row')?.getAttribute('title')).toBeNull()
+    expect(screen.getByRole('button',{name:'Frequency'})).toBeTruthy()
+
+    act(()=>useUiPreferencesStore.getState().setLanguage('vi'))
+    expect(screen.getByRole('button',{name:'CÀI ĐẶT TẦN SỐ'}).getAttribute('title'))
+      .toBe('Cài đặt tần số trung tâm và bước tần')
+    const vietnameseCenter=screen.getByLabelText('Tần số trung tâm')
+    expect(vietnameseCenter.closest('.control-row')?.getAttribute('title'))
+      .toBe('Cài đặt tần số trung tâm của thiết bị. Đơn vị MHz hoặc GHz. Ví dụ 2440 MHz')
+    expect(screen.getByLabelText('RBW - Băng thông phân giải').closest('.control-row')?.getAttribute('title')).toBeNull()
+    expect(screen.getByLabelText('Chế độ phát hiện công suất').closest('.control-row')?.getAttribute('title'))
+      .toBe('Lấy giá trị lớn nhất trong mỗi khoảng thời gian/tần số quét.')
+    expect(screen.getByRole('button',{name:'Playback'})).toBeTruthy()
+  })
+
   it('renders sections in workflow order and keeps all collapsed by default', () => {
     vi.stubGlobal('fetch', vi.fn(() => json({}, 404)))
     const { container } = render(<ControlSidebar />)
