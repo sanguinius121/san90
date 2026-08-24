@@ -5,3 +5,114 @@ python3 tools/ai_gray8_receiver.py \
   --save-dir /home/tuancoi/label_dataset/DJI \
   --save-every 1 \
   --stop-after 200
+  
+  
+  
+  
+cd /home/tuancoi/san90
+
+python3 tools/ai_gray8_receiver.py \
+  --connect tcp://127.0.0.1:5557 \
+  --save-dir /home/tuancoi/label_dataset/DJI \
+  --save-every 1 \
+  --max-files 200 \
+  --stop-after 200 \
+  --auto-labelme \
+  --threshold-db 6 \
+  --auto-label AUTO_CANDIDATE
+  
+  
+  
+  Chạy từ thư mục dự án:
+
+```bash
+cd /home/tuancoi/san90
+```
+
+Với Digital VTX liên tục, nên dùng `persistent`:
+
+```bash
+python3 tools/ai_gray8_receiver.py \
+  --connect tcp://127.0.0.1:5557 \
+  --save-dir /home/tuancoi/label_dataset/VTX_380 \
+  --save-every 1 \
+  --max-files 200 \
+  --stop-after 200 \
+  --auto-labelme true \
+  --threshold-db 6 \
+  --detection-mode persistent \
+  --persistent-min-duty 0.60 \
+  --auto-label AUTO_CANDIDATE
+```
+
+Các mode detector
+
+`transient` — dành cho burst/FHSS rời rạc:
+
+```bash
+python3 ai_gray8_receiver.py \
+  --connect tcp://127.0.0.1:5557 \
+  --save-dir /home/tuancoi/label_dataset/TRANSIENT \
+  --save-every 1 \
+  --max-files 200 \
+  --stop-after 200 \
+  --auto-labelme true \
+  --threshold-db 6 \
+  --detection-mode transient \
+  --auto-label AUTO_CANDIDATE
+```
+
+`persistent` — dành cho tín hiệu liên tục như Digital VTX:
+
+```bash
+python3 ai_gray8_receiver.py \
+  --connect tcp://127.0.0.1:5557 \
+  --save-dir /home/tuancoi/label_dataset/PERSISTENT \
+  --save-every 1 \
+  --max-files 200 \
+  --stop-after 200 \
+  --auto-labelme true \
+  --threshold-db 6 \
+  --detection-mode persistent \
+  --persistent-min-duty 0.60 \
+  --auto-label AUTO_CANDIDATE
+```
+
+`hybrid` — phát hiện đồng thời burst và tín hiệu liên tục:
+
+```bash
+python3 tools/ai_gray8_receiver.py \
+  --connect tcp://127.0.0.1:5557 \
+  --save-dir /home/tuancoi/label_dataset/HYBRID \
+  --save-every 1 \
+  --max-files 200 \
+  --stop-after 200 \
+  --auto-labelme true \
+  --threshold-db 6 \
+  --detection-mode hybrid \
+  --persistent-min-duty 0.60 \
+  --auto-label AUTO_CANDIDATE
+```
+
+Chỉ tạo ảnh sạch, không tạo LabelMe:
+
+```bash
+python3 tools/ai_gray8_receiver.py \
+  --connect tcp://127.0.0.1:5557 \
+  --save-dir /home/tuancoi/label_dataset/RAW_IMAGES \
+  --save-every 1 \
+  --max-files 200 \
+  --stop-after 200
+```
+
+Ý nghĩa các option quan trọng:
+
+- `--save-every 1`: lưu mọi ảnh nhận được.
+- `--stop-after 200`: tự dừng sau 200 ảnh hợp lệ.
+- `--max-files 200`: chỉ giữ tối đa 200 bộ ảnh/JSON trong thư mục.
+- `--threshold-db 6`: ngưỡng cao hơn nền 6 dB.
+- `--persistent-min-duty 0.60`: tín hiệu phải xuất hiện ít nhất 60% chiều dài thời gian.
+- `--auto-label`: tên nhãn tạm trong LabelMe.
+- `--detection-mode`: mỗi lần chạy chọn đúng một trong `transient`, `persistent`, `hybrid`.
+
+Lưu ý: YOLO service và tool này đều nhận từ port `5557` theo cơ chế PUSH/PULL. Nếu chạy đồng thời, ảnh có thể bị chia giữa hai consumer. Khi tạo dataset đủ 200 ảnh liên tiếp, nên tạm dừng YOLO service.

@@ -31,12 +31,6 @@ def _parse_bool(value: str) -> bool:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--connect", default="tcp://127.0.0.1:5557")
-    parser.add_argument(
-        "--socket-type",
-        choices=["pull", "sub"],
-        default="pull",
-        help="PULL for direct backend connection; SUB when connecting via zmq_proxy.py (default: pull)",
-    )
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--max-files", type=int, default=20)
@@ -58,6 +52,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Signal threshold in dB above the per-frequency noise floor (default: 6)",
     )
     parser.add_argument(
+        "--detection-mode",
+        choices=("transient", "persistent", "hybrid"),
+        default="transient",
+        help="Auto-label detector: transient, persistent, or hybrid (default: transient)",
+    )
+    parser.add_argument(
+        "--persistent-min-duty",
+        type=float,
+        default=0.60,
+        help="Minimum fraction of image rows occupied by a persistent signal (default: 0.60)",
+    )
+    parser.add_argument(
         "--auto-label",
         default="AUTO_CANDIDATE",
         help="Placeholder label for automatic rectangles (default: AUTO_CANDIDATE)",
@@ -69,6 +75,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--stop-after must be positive")
     if not math.isfinite(args.threshold_db) or args.threshold_db <= 0:
         parser.error("--threshold-db must be finite and positive")
+    if not math.isfinite(args.persistent_min_duty) or not 0 < args.persistent_min_duty <= 1:
+        parser.error("--persistent-min-duty must be finite and in the interval (0, 1]")
     if not args.auto_label.strip():
         parser.error("--auto-label must not be empty")
     return args
@@ -111,44 +119,42 @@ def detect_candidate_boxes(
     *,
     threshold_db: float,
     padding: int = 4,
+    detection_mode: str = "transient",
+    persistent_min_duty: float = 0.60,
 ) -> list[tuple[int, int, int, int]]:
-    """Detect frequency/time regions above a column-local noise floor.
+    """Detect transient bursts, persistent emissions, or both.
 
-    The GRAY8 protocol has a linear dB mapping, so subtracting each column's
-    15th percentile in code space is equivalent to a relative dB threshold.
-    Every disconnected emission is retained as an individual burst candidate;
-    separate pulses are never joined merely because they share a frequency.
-    The result is deliberately a candidate set for human labeling.
+    Transient mode compares every pixel with the 15th time percentile of its
+    frequency column. Persistent mode compares the time-median frequency
+    profile with a rolling local frequency floor, then requires the selected
+    columns to exceed that floor for ``persistent_min_duty`` of all rows.
     """
     if image.ndim != 2 or image.dtype != np.uint8:
         raise ValueError("auto LabelMe detection requires a 2-D uint8 image")
     db_per_gray_level = float(metadata["db_per_gray_level"])
     if not math.isfinite(db_per_gray_level) or db_per_gray_level <= 0:
         raise ValueError("metadata db_per_gray_level must be finite and positive")
+    if detection_mode not in {"transient", "persistent", "hybrid"}:
+        raise ValueError("detection_mode must be transient, persistent, or hybrid")
+    if not math.isfinite(persistent_min_duty) or not 0 < persistent_min_duty <= 1:
+        raise ValueError("persistent_min_duty must be finite and in the interval (0, 1]")
     threshold_codes = threshold_db / db_per_gray_level
-    noise_codes = np.percentile(image, 15.0, axis=0)
-    raw_mask = image.astype(np.float32) >= noise_codes[np.newaxis, :] + threshold_codes
-
-    # Remove isolated one-pixel noise while retaining short horizontal pulses.
-    padded = np.pad(raw_mask, 1, mode="constant", constant_values=False)
-    neighbor_count = np.zeros(raw_mask.shape, dtype=np.uint8)
-    for y_offset in range(3):
-        for x_offset in range(3):
-            neighbor_count += padded[
-                y_offset : y_offset + raw_mask.shape[0],
-                x_offset : x_offset + raw_mask.shape[1],
-            ]
-    mask = raw_mask & (neighbor_count >= 2)
-    height, width = mask.shape
-
+    image_codes = image.astype(np.float32)
     boxes: list[tuple[int, int, int, int]] = []
-    for x0, y0, x1, y1, area in _connected_components(mask):
-        # Short FHSS bursts may be only one or two rows high. Requiring both a
-        # modest horizontal extent and area rejects isolated noise while
-        # retaining those valid individual emissions.
-        if area >= 6 and x1 - x0 >= 4:
-            boxes.append((x0, y0, x1, y1))
+    if detection_mode in {"transient", "hybrid"}:
+        noise_codes = np.percentile(image, 15.0, axis=0)
+        transient_mask = image_codes >= noise_codes[np.newaxis, :] + threshold_codes
+        boxes.extend(_boxes_from_transient_mask(transient_mask))
+    if detection_mode in {"persistent", "hybrid"}:
+        boxes.extend(
+            _persistent_boxes(
+                image_codes,
+                threshold_codes=threshold_codes,
+                minimum_duty=persistent_min_duty,
+            )
+        )
     boxes = _merge_same_burst_fragments(boxes)
+    height, width = image.shape
 
     padded_boxes = {
         (
@@ -160,6 +166,71 @@ def detect_candidate_boxes(
         for x0, y0, x1, y1 in boxes
     }
     return sorted(padded_boxes, key=lambda box: (box[1], box[0], box[3], box[2]))
+
+
+def _boxes_from_transient_mask(raw_mask: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Extract individual burst boxes from a sparse transient mask."""
+    padded = np.pad(raw_mask, 1, mode="constant", constant_values=False)
+    neighbor_count = np.zeros(raw_mask.shape, dtype=np.uint8)
+    for y_offset in range(3):
+        for x_offset in range(3):
+            neighbor_count += padded[
+                y_offset : y_offset + raw_mask.shape[0],
+                x_offset : x_offset + raw_mask.shape[1],
+            ]
+    mask = raw_mask & (neighbor_count >= 2)
+
+    boxes: list[tuple[int, int, int, int]] = []
+    for x0, y0, x1, y1, area in _connected_components(mask):
+        # Short FHSS bursts may be only one or two rows high. Requiring both a
+        # modest horizontal extent and area rejects isolated noise while
+        # retaining those valid individual emissions.
+        if area >= 6 and x1 - x0 >= 4:
+            boxes.append((x0, y0, x1, y1))
+    return boxes
+
+
+def _persistent_boxes(
+    image_codes: np.ndarray,
+    *,
+    threshold_codes: float,
+    minimum_duty: float,
+) -> list[tuple[int, int, int, int]]:
+    """Find emissions persistent in time but locally elevated in frequency."""
+    height, width = image_codes.shape
+    profile = np.median(image_codes, axis=0)
+    window_width = min(321, width if width % 2 else width - 1)
+    half_window = window_width // 2
+    padded_profile = np.pad(profile, (half_window, half_window), mode="reflect")
+    windows = np.lib.stride_tricks.sliding_window_view(padded_profile, window_width)
+    local_floor = np.percentile(windows, 15.0, axis=1)
+    above_floor = image_codes >= local_floor[np.newaxis, :] + threshold_codes
+    persistent_columns = np.mean(above_floor, axis=0) >= minimum_duty
+
+    boxes: list[tuple[int, int, int, int]] = []
+    for x0, x1 in _true_runs(persistent_columns, maximum_gap=2):
+        active_rows = np.flatnonzero(np.any(above_floor[:, x0:x1], axis=1))
+        area = int(np.count_nonzero(above_floor[:, x0:x1]))
+        if x1 - x0 < 4 or area < 6 or active_rows.size == 0:
+            continue
+        boxes.append((x0, int(active_rows[0]), x1, int(active_rows[-1]) + 1))
+    return boxes
+
+
+def _true_runs(values: np.ndarray, *, maximum_gap: int = 0) -> list[tuple[int, int]]:
+    indexes = np.flatnonzero(values)
+    if indexes.size == 0:
+        return []
+    runs: list[tuple[int, int]] = []
+    start = previous = int(indexes[0])
+    for raw_index in indexes[1:]:
+        index = int(raw_index)
+        if index - previous > maximum_gap + 1:
+            runs.append((start, previous + 1))
+            start = index
+        previous = index
+    runs.append((start, previous + 1))
+    return runs
 
 
 def _merge_same_burst_fragments(
@@ -204,6 +275,7 @@ def build_labelme_document(
     *,
     label: str,
     threshold_db: float,
+    detection_mode: str = "transient",
 ) -> dict[str, object]:
     height, width = image.shape
     return {
@@ -214,7 +286,10 @@ def build_labelme_document(
                 "label": label,
                 "points": [[float(x0), float(y0)], [float(x1), float(y1)]],
                 "group_id": None,
-                "description": f"Auto-generated at {threshold_db:g} dB above the local noise floor",
+                "description": (
+                    f"Auto-generated using {detection_mode} detection at "
+                    f"{threshold_db:g} dB above the local noise floor"
+                ),
                 "shape_type": "rectangle",
                 "flags": {"auto_generated": True},
                 "mask": None,
@@ -237,6 +312,8 @@ def save_preview(
     auto_labelme: bool = False,
     threshold_db: float = 6.0,
     auto_label: str = "AUTO_CANDIDATE",
+    detection_mode: str = "transient",
+    persistent_min_duty: float = 0.60,
 ) -> None:
     from PIL import Image
 
@@ -246,13 +323,20 @@ def save_preview(
     json_path = directory / f"{stem}.json"
     Image.fromarray(image, mode="L").save(image_path, format="PNG")
     if auto_labelme:
-        boxes = detect_candidate_boxes(image, metadata, threshold_db=threshold_db)
+        boxes = detect_candidate_boxes(
+            image,
+            metadata,
+            threshold_db=threshold_db,
+            detection_mode=detection_mode,
+            persistent_min_duty=persistent_min_duty,
+        )
         labelme = build_labelme_document(
             image_path.name,
             image,
             boxes,
             label=auto_label,
             threshold_db=threshold_db,
+            detection_mode=detection_mode,
         )
         json_path.write_text(json.dumps(labelme, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         json_path.with_suffix(".meta.json").write_text(
@@ -283,11 +367,7 @@ def main() -> int:
         except ImportError:
             print("--display requires optional OpenCV; receiving will continue without a window", file=sys.stderr)
     context = zmq.Context.instance()
-    if args.socket_type == "sub":
-        socket = context.socket(zmq.SUB)
-        socket.setsockopt(zmq.SUBSCRIBE, b"")
-    else:
-        socket = context.socket(zmq.PULL)
+    socket = context.socket(zmq.PULL)
     socket.setsockopt(zmq.RCVHWM, 2)
     socket.connect(args.connect)
     received = 0
@@ -315,6 +395,8 @@ def main() -> int:
                     auto_labelme=args.auto_labelme,
                     threshold_db=args.threshold_db,
                     auto_label=args.auto_label,
+                    detection_mode=args.detection_mode,
+                    persistent_min_duty=args.persistent_min_duty,
                 )
             if args.stop_after is not None and received >= args.stop_after:
                 print(f"Received {received} valid images; stopping.")
