@@ -5,3 +5,7 @@ pyzmq>=25.1
 Pillow>=9.0
 pyftdi>=0.55
 google-crc32c>=1.5
+psycopg2-binary>=2.9
+opencv-python>=4.9
+ultralytics>=8.3
+openvino>=2024.0

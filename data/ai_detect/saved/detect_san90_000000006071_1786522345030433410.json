@@ -1,0 +1,83 @@
+{
+  "sequence": 6071,
+  "timestamp_ns": 1786522345030433410,
+  "generated_at": 1786522345.060372,
+  "width": 640,
+  "height": 640,
+  "center_frequency_hz": 2450000000.0,
+  "start_frequency_hz": 2399218750.0,
+  "stop_frequency_hz": 2500781250.0,
+  "detections": [
+    {
+      "label": "WIFI_802.11",
+      "confidence": 0.89599609375,
+      "bbox": [
+        187.5,
+        196.3125,
+        293.5,
+        214.1875
+      ],
+      "class_id": 3
+    },
+    {
+      "label": "MOUSE",
+      "confidence": 0.88037109375,
+      "bbox": [
+        288.25,
+        0.5,
+        314.25,
+        640.0
+      ],
+      "class_id": 4
+    },
+    {
+      "label": "DJI_CC",
+      "confidence": 0.822265625,
+      "bbox": [
+        61.21875,
+        536.75,
+        75.03125,
+        545.25
+      ],
+      "class_id": 5
+    },
+    {
+      "label": "DJI_CC",
+      "confidence": 0.72509765625,
+      "bbox": [
+        23.71875,
+        496.125,
+        37.46875,
+        503.875
+      ],
+      "class_id": 5
+    }
+  ],
+  "label_freq_ranges_hz": {
+    "DJI_DroneID": {
+      "start_hz": 2405713715.8890843,
+      "stop_hz": 2479496527.7777777
+    },
+    "MOUSE": {
+      "start_hz": 2400240228.261933,
+      "stop_hz": 2479337588.028169
+    },
+    "WIFI_802.11": {
+      "start_hz": 2401139231.2206573,
+      "stop_hz": 2481602479.460094
+    },
+    "DJI_CC": {
+      "start_hz": 2400175658.988654,
+      "stop_hz": 2481920358.9593115
+    },
+    "LRVTX": {
+      "start_hz": 924993275.6259781,
+      "stop_hz": 930297889.7691705
+    },
+    "ELRS": {
+      "start_hz": 2402967038.341158,
+      "stop_hz": 2435192072.574335
+    }
+  },
+  "saved_at_ns": 1786522345062649509
+}

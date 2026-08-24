@@ -108,8 +108,16 @@ class AiStreamPipeline:
 
     def set_power_profile(self, name: str) -> PowerProfile:
         profile = require_power_profile(name)
+        return self.set_power_range(profile.min_dbm, profile.max_dbm, generation=profile.generation)
+
+    def set_power_range(self, low_dbm: float, high_dbm: float, *, generation: int) -> PowerProfile:
+        from .power_range import validate_power_range
+
+        snapshot = validate_power_range(low_dbm, high_dbm, generation=generation)
+        profile = snapshot.as_profile()
         with self._profile_lock:
             self._profile = profile
+        self.clear_preview("power_range_changed")
         return profile
 
     def reset_timeline(self, sequence_namespace: int = 0) -> None:
@@ -161,6 +169,7 @@ class AiStreamPipeline:
             "active_power_profile": profile.name,
             "power_min_dbm": profile.min_dbm,
             "power_max_dbm": profile.max_dbm,
+            "power_range_generation": profile.generation,
             "target_images_per_second": self.config.target_images_per_second,
             "image_width": 640,
             "image_height": 640,

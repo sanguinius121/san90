@@ -1,0 +1,105 @@
+{
+  "sequence": 6141,
+  "timestamp_ns": 1786522353835355982,
+  "generated_at": 1786522353.8643315,
+  "width": 640,
+  "height": 640,
+  "center_frequency_hz": 2450000000.0,
+  "start_frequency_hz": 2399218750.0,
+  "stop_frequency_hz": 2500781250.0,
+  "detections": [
+    {
+      "label": "WIFI_802.11",
+      "confidence": 0.90869140625,
+      "bbox": [
+        187.5,
+        204.75,
+        301.0,
+        222.5
+      ],
+      "class_id": 3
+    },
+    {
+      "label": "DJI_CC",
+      "confidence": 0.89453125,
+      "bbox": [
+        500.5,
+        479.875,
+        517.0,
+        489.125
+      ],
+      "class_id": 5
+    },
+    {
+      "label": "MOUSE",
+      "confidence": 0.8818359375,
+      "bbox": [
+        131.5,
+        0.0,
+        157.0,
+        639.0
+      ],
+      "class_id": 4
+    },
+    {
+      "label": "DJI_CC",
+      "confidence": 0.85205078125,
+      "bbox": [
+        502.0,
+        582.0,
+        516.0,
+        590.0
+      ],
+      "class_id": 5
+    },
+    {
+      "label": "DJI_CC",
+      "confidence": 0.7880859375,
+      "bbox": [
+        502.875,
+        443.25,
+        515.125,
+        451.75
+      ],
+      "class_id": 5
+    },
+    {
+      "label": "DJI_CC",
+      "confidence": 0.787109375,
+      "bbox": [
+        502.375,
+        598.25,
+        515.625,
+        605.75
+      ],
+      "class_id": 5
+    }
+  ],
+  "label_freq_ranges_hz": {
+    "DJI_DroneID": {
+      "start_hz": 2405713715.8890843,
+      "stop_hz": 2479496527.7777777
+    },
+    "MOUSE": {
+      "start_hz": 2400240228.261933,
+      "stop_hz": 2479337588.028169
+    },
+    "WIFI_802.11": {
+      "start_hz": 2401139231.2206573,
+      "stop_hz": 2481602479.460094
+    },
+    "DJI_CC": {
+      "start_hz": 2400175658.988654,
+      "stop_hz": 2481920358.9593115
+    },
+    "LRVTX": {
+      "start_hz": 924993275.6259781,
+      "stop_hz": 930297889.7691705
+    },
+    "ELRS": {
+      "start_hz": 2402967038.341158,
+      "stop_hz": 2435192072.574335
+    }
+  },
+  "saved_at_ns": 1786522353867034962
+}

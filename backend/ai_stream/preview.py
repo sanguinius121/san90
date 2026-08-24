@@ -33,6 +33,11 @@ class AiPreviewSnapshot:
     created_at_ns: int
     content_type: str
     image: bytes
+    power_min_dbm: float | None = None
+    power_max_dbm: float | None = None
+    power_range_db: float | None = None
+    db_per_gray_level: float | None = None
+    power_range_generation: int | None = None
 
     def status(self) -> dict[str, object]:
         return {
@@ -43,6 +48,11 @@ class AiPreviewSnapshot:
             "playback_epoch": self.playback_epoch,
             "config_id": self.config_id,
             "configuration_generation": self.configuration_generation,
+            "power_min_dbm": self.power_min_dbm,
+            "power_max_dbm": self.power_max_dbm,
+            "power_range_db": self.power_range_db,
+            "db_per_gray_level": self.db_per_gray_level,
+            "power_range_generation": self.power_range_generation,
             "center_frequency_hz": self.center_frequency_hz,
             "frequency_start_hz": self.frequency_start_hz,
             "frequency_stop_hz": self.frequency_stop_hz,
@@ -94,6 +104,11 @@ class LatestAiPreviewStore:
             "playback_epoch": None,
             "config_id": None,
             "configuration_generation": None,
+            "power_min_dbm": None,
+            "power_max_dbm": None,
+            "power_range_db": None,
+            "db_per_gray_level": None,
+            "power_range_generation": None,
             "center_frequency_hz": None,
             "frequency_start_hz": None,
             "frequency_stop_hz": None,
@@ -252,6 +267,11 @@ class AiPreviewEncoder:
                     playback_epoch=capture.playback_epoch,
                     config_id=capture.config_id,
                     configuration_generation=capture.configuration_generation,
+                    power_min_dbm=capture.power_profile.min_dbm,
+                    power_max_dbm=capture.power_profile.max_dbm,
+                    power_range_db=capture.power_profile.max_dbm - capture.power_profile.min_dbm,
+                    db_per_gray_level=capture.power_profile.db_per_gray_level,
+                    power_range_generation=capture.power_profile.generation,
                     center_frequency_hz=capture.center_frequency_hz,
                     frequency_start_hz=capture.start_frequency_hz,
                     frequency_stop_hz=capture.stop_frequency_hz,

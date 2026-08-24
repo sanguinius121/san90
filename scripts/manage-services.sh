@@ -83,8 +83,26 @@ resolve_node_path() {
   return 1
 }
 
+resolve_backend_python() {
+  local candidate
+  for candidate in \
+    "${BACKEND_PYTHON:-}" \
+    "$PROJECT_DIR/.venv/bin/python3" \
+    "$(command -v python3 2>/dev/null || true)" \
+    "/usr/bin/python3"; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    if "$candidate" -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s\n' \
+    "Backend requires a Python interpreter with FastAPI and Uvicorn. Install backend/requirements.txt or set BACKEND_PYTHON." >&2
+  return 1
+}
+
 start_service() {
-  local service="$1" source="${2:-}" pid log port node_path
+  local service="$1" source="${2:-}" pid log port node_path python_path
   case "$service" in
     backend) port=8000 ;;
     frontend) port=5173 ;;
@@ -114,12 +132,13 @@ start_service() {
       if [[ "$source" == "san90" ]]; then
         reset_san90_for_handoff
       fi
+      python_path="$(resolve_backend_python)"
       log="$RUNTIME_DIR/backend.log"
       setsid env \
         ANALYZER_SOURCE="$source" \
         SAN90_STATUS_HZ="${SAN90_STATUS_HZ:-2}" \
         SAN90_RF_SWITCH_ENABLED="${SAN90_RF_SWITCH_ENABLED:-true}" \
-        python3 -m uvicorn backend.main:app --host 0.0.0.0 --port "$port" \
+        "$python_path" -m uvicorn backend.main:app --host 0.0.0.0 --port "$port" \
         >"$log" 2>&1 < /dev/null &
       ;;
     frontend)

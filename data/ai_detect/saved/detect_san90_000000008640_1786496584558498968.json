@@ -1,0 +1,172 @@
+{
+  "sequence": 8640,
+  "timestamp_ns": 1786496584558498968,
+  "generated_at": 1786496584.589879,
+  "width": 640,
+  "height": 640,
+  "center_frequency_hz": 900000000.0,
+  "start_frequency_hz": 849218750.0,
+  "stop_frequency_hz": 950781250.0,
+  "detections": [
+    {
+      "label": "TBS",
+      "confidence": 0.83642578125,
+      "bbox": [
+        415.25,
+        529.0,
+        428.25,
+        610.0
+      ],
+      "class_id": 0
+    },
+    {
+      "label": "TBS",
+      "confidence": 0.8291015625,
+      "bbox": [
+        375.5,
+        428.125,
+        389.0,
+        508.875
+      ],
+      "class_id": 0
+    },
+    {
+      "label": "TBS",
+      "confidence": 0.82568359375,
+      "bbox": [
+        454.5,
+        20.5,
+        467.5,
+        100.0
+      ],
+      "class_id": 0
+    },
+    {
+      "label": "TBS",
+      "confidence": 0.7822265625,
+      "bbox": [
+        341.25,
+        123.0,
+        354.75,
+        202.5
+      ],
+      "class_id": 0
+    },
+    {
+      "label": "Bluetooth",
+      "confidence": 0.77294921875,
+      "bbox": [
+        449.125,
+        327.875,
+        456.875,
+        340.125
+      ],
+      "class_id": 8
+    },
+    {
+      "label": "Bluetooth",
+      "confidence": 0.7724609375,
+      "bbox": [
+        455.5,
+        225.8125,
+        463.5,
+        238.6875
+      ],
+      "class_id": 8
+    },
+    {
+      "label": "Bluetooth",
+      "confidence": 0.73583984375,
+      "bbox": [
+        330.75,
+        334.75,
+        338.75,
+        349.75
+      ],
+      "class_id": 8
+    },
+    {
+      "label": "GSM",
+      "confidence": 0.69482421875,
+      "bbox": [
+        550.25,
+        0.0,
+        639.75,
+        639.5
+      ],
+      "class_id": 1
+    },
+    {
+      "label": "TBS",
+      "confidence": 0.693359375,
+      "bbox": [
+        336.625,
+        536.75,
+        352.375,
+        635.25
+      ],
+      "class_id": 0
+    },
+    {
+      "label": "Bluetooth",
+      "confidence": 0.623046875,
+      "bbox": [
+        463.75,
+        131.625,
+        473.25,
+        144.625
+      ],
+      "class_id": 8
+    },
+    {
+      "label": "Bluetooth",
+      "confidence": 0.59375,
+      "bbox": [
+        436.25,
+        436.875,
+        444.75,
+        451.125
+      ],
+      "class_id": 8
+    }
+  ],
+  "label_freq_ranges_hz": {
+    "WIFI_802.11": {
+      "start_hz": 866498480.9027778,
+      "stop_hz": 5835304430.751174
+    },
+    "MOUSE": {
+      "start_hz": 2397935601.892606,
+      "stop_hz": 2482635587.832551
+    },
+    "DJI_CC": {
+      "start_hz": 849139900.9835925,
+      "stop_hz": 5835860719.8748045
+    },
+    "DJI_DroneID": {
+      "start_hz": 849139280.1251956,
+      "stop_hz": 5834152117.56651
+    },
+    "ELRS": {
+      "start_hz": 2398464573.2467723,
+      "stop_hz": 2481602479.460094
+    },
+    "Bluetooth": {
+      "start_hz": 884632512.9597026,
+      "stop_hz": 5788476807.022692
+    },
+    "TBS": {
+      "start_hz": 890801361.9913929,
+      "stop_hz": 928072733.274648
+    },
+    "LRVTX": {
+      "start_hz": 925013143.0946792,
+      "stop_hz": 930456829.5187793
+    },
+    "DJI_40MHz": {
+      "start_hz": 2389139280.1251955,
+      "stop_hz": 2490860719.8748045
+    }
+  },
+  "saved_at_ns": 1786496584591578101
+}

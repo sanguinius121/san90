@@ -594,6 +594,10 @@ class San90Source(AnalyzerSource):
         self._ai_stream.set_power_profile(name)
         return self._ai_stream.status()
 
+    def set_ai_power_range(self, low_dbm: float, high_dbm: float, generation: int) -> dict[str, object]:
+        self._ai_stream.set_power_range(low_dbm, high_dbm, generation=generation)
+        return self._ai_stream.status()
+
     def latest_ai_preview_png(self) -> bytes | None:
         return self._ai_stream.latest_preview_png()
 

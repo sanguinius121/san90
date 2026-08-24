@@ -297,6 +297,10 @@ class PlaybackSource(AnalyzerSource):
     def ai_status(self) -> dict[str, object]:
         return {"run_ai": self._run_ai, **self._ai_pipeline.status()}
 
+    def set_ai_power_range(self, low_dbm: float, high_dbm: float, generation: int) -> dict[str, object]:
+        self._ai_pipeline.set_power_range(low_dbm, high_dbm, generation=generation)
+        return self.ai_status()
+
     def accept_ai_result(self, result: dict[str, object]) -> dict[str, object] | None:
         sequence = result.get("sequence")
         if not isinstance(sequence, int):

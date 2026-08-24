@@ -23,7 +23,7 @@ Only vectorized conversion/interpolation, buffer ownership changes, and non-bloc
 
 There is no image header, axes, labels, colormap, timestamp drawing, or bounding boxes.
 
-## Fixed power profiles
+## Dynamic GRAY8 power range
 
 | Profile | Minimum | Maximum |
 |---|---:|---:|
@@ -31,7 +31,19 @@ There is no image header, axes, labels, colormap, timestamp drawing, or bounding
 | `external_lna` (default) | -120 dBm | -20 dBm |
 | `strong_signal` | -100 dBm | 0 dBm |
 
-The fixed mapping is `clip(rint((dBm - min_dBm) * 255 / (max_dBm - min_dBm)), 0, 255)`. Per-image min/max, percentile scaling, histogram equalization, AGC, and adaptive contrast are prohibited because they make identical RF power produce different pixels. Image extrema and clipping ratios are diagnostic only.
+These profiles remain compact presets, while the committed mapping may also be
+customized from -140 to +10 dBm with at least 10 dB between Low and High. The
+mapping is `clip(rint((dBm - min_dBm) * 255 / (max_dBm - min_dBm)), 0, 255)`.
+It affects AI/dataset GRAY8 pixels only: it is not the SAN-90 hardware Reference
+Level and does not change raw traces, spectrum, waterfall, recording CONFIG, or
+playback timing. Per-image adaptive scaling remains prohibited.
+
+The backend persists the selected values atomically in
+`config/ai-power-range.json`. A missing file defaults to External LNA. One
+immutable snapshot is captured when each 640-row image begins, so a range
+change never mixes two mappings inside one image and performs no per-pixel
+locking. Hardware, simulator, and playback pipelines receive the same current
+snapshot.
 
 ## Configuration
 
@@ -40,7 +52,7 @@ The fixed mapping is `clip(rint((dBm - min_dBm) * 255 / (max_dBm - min_dBm)), 0,
 | `AI_STREAM_ENABLED` | `true` |
 | `AI_TARGET_IMAGES_PER_SECOND` | `10.0` (validated 7–10) |
 | `AI_IMAGE_WIDTH`, `AI_IMAGE_HEIGHT`, `AI_TRACES_PER_IMAGE` | `640` each |
-| `AI_POWER_PROFILE` | `external_lna` |
+| `AI_POWER_PROFILE` | `external_lna` startup fallback; persisted range is authoritative |
 | `AI_STREAM_BIND` | `tcp://0.0.0.0:5557` |
 | `AI_QUEUE_SIZE`, `AI_BUFFER_POOL_SIZE` | `2`, `4` |
 | `AI_DROP_POLICY` | `drop_oldest` |
@@ -50,7 +62,9 @@ The fixed mapping is `clip(rint((dBm - min_dBm) * 255 / (max_dBm - min_dBm)), 0,
 | `AI_SEND_HIGH_WATER_MARK`, `AI_SEND_TIMEOUT_MS`, `AI_SOCKET_LINGER_MS` | `2`, `5`, `0` |
 | `AI_CLIPPED_HIGH_WARNING_RATIO` | `0.001` |
 
-Dimensions are validated as exactly 640. An invalid startup profile is rejected. A rejected runtime profile leaves the prior valid profile active. Profile changes are snapshotted only when a new image starts.
+Dimensions are validated as exactly 640. Invalid runtime values leave the prior
+verified range active. Profile/range changes are snapshotted only when a new
+image starts.
 
 ```bash
 python3 -m pip install --user -r backend/requirements.txt
@@ -60,6 +74,10 @@ npm run frontend:start
 wget -qO- http://127.0.0.1:8000/api/ai-stream/status
 wget -qO- --method=PUT --header='Content-Type: application/json' \
   --body-data='{"profile":"normal"}' http://127.0.0.1:8000/api/ai-stream/power-profile
+wget -qO- http://127.0.0.1:8000/api/analyzer/ai/power-range
+wget -qO- --method=PUT --header='Content-Type: application/json' \
+  --body-data='{"power_min_dbm":-100,"power_max_dbm":-50}' \
+  http://127.0.0.1:8000/api/analyzer/ai/power-range
 wget -qO- --method=PUT --header='Content-Type: application/json' \
   --body-data='{"enabled":false}' http://127.0.0.1:8000/api/ai-stream/enabled
 ```
@@ -135,10 +153,13 @@ GET /api/analyzer/ai/preview/image?sequence=<latest sequence>
 ```
 
 Image retrieval is sequence-exact and uses no-cache headers, so metadata cannot
-silently be paired with a newer image. Source, playback epoch, CONFIG, and
-frequency metadata are internal preview fields; the port-5557 protocol remains
-unchanged. Playback seek/loop/CONFIG/Stop and source restoration clear the
-preview through the same epoch/reset rules used for AI detections.
+silently be paired with a newer image. The current sidebar shows the annotated
+review image returned by the detector on port 5555. The detector copies the
+optional power-range metadata from its port-5557 input into that review result;
+the backend rejects an old generation after a range commit. The sidebar shows
+`APPLYING` until a new matching review image arrives. Source, playback epoch,
+CONFIG, and frequency reset rules remain unchanged, as do port-5557 framing and
+port-5558 detection JSON.
 
 The expanded, visible sidebar polls with `viewer=true`. Collapse/unmount stops
 polling; hidden-page status checks use `viewer=false`. When the lease expires,

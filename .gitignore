@@ -1,4 +1,5 @@
 node_modules/
+.venv/
 dist/
 .vite/
 *.log
@@ -6,6 +7,8 @@ dist/
 config/frequency-scan.json
 config/.frequency-scan.json.*.tmp
 config/.recording.json.*.tmp
+config/ai-power-range.json
+config/.ai-power-range.json.*.tmp
 recordings/
 __pycache__/
 *.py[cod]

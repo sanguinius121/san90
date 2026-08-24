@@ -183,6 +183,15 @@ tail -n 100 .run/backend.log
 tail -n 100 .run/frontend.log
 ```
 
+The service manager ignores an activated Python environment that cannot import
+FastAPI and Uvicorn. It checks `BACKEND_PYTHON`, `.venv/bin/python3`, the
+interpreter on `PATH`, and `/usr/bin/python3`, in that order. To select a
+specific environment explicitly:
+
+```bash
+BACKEND_PYTHON=/path/to/venv/bin/python3 npm run backend:start
+```
+
 Stop both services cleanly with:
 
 ```bash

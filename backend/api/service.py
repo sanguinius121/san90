@@ -11,6 +11,7 @@ import sys
 import time
 from dataclasses import asdict
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -34,6 +35,18 @@ from backend.analyzer.tradeoff import (
     visible_rows,
 )
 from backend.ai_detection import AiDetectionSubscriber
+from backend.ai_detection_review import (
+    AiDetectionReviewSnapshot,
+    AiDetectionReviewSubscriber,
+    LatestAiDetectionReviewStore,
+    save_snapshot_to_disk,
+)
+from backend.ai_detection_db import DEFAULT_DSN as AI_DETECTION_DB_DEFAULT_DSN, SpectrogramDbWriter
+from backend.ai_stream.power_range import (
+    DEFAULT_POWER_RANGE_CONFIG_PATH,
+    AiPowerRangeConfig,
+    AiPowerRangeStore,
+)
 from backend.frequency_scan import (
     FREQUENCY_SCAN_CONFIG_PATH,
     FrequencyScanController,
@@ -106,6 +119,7 @@ class AnalyzerService:
         frequency_scan_config_path: str | os.PathLike[str] | None = FREQUENCY_SCAN_CONFIG_PATH,
         recording_config_path: str | os.PathLike[str] | None = DEFAULT_RECORDING_CONFIG_PATH,
         recording_root: str | os.PathLike[str] | None = None,
+        ai_power_range_config_path: str | os.PathLike[str] | None = DEFAULT_POWER_RANGE_CONFIG_PATH,
     ) -> None:
         self.source_name = (source_name or os.getenv("ANALYZER_SOURCE", "simulator")).lower()
         self.source: AnalyzerSource | None = None
@@ -135,6 +149,30 @@ class AnalyzerService:
         )
         self._ai_detection_task: asyncio.Task[None] | None = None
         self._ai_detection_sequence = 0
+        self._ai_review_store = LatestAiDetectionReviewStore()
+        self._ai_review_subscriber = (
+            AiDetectionReviewSubscriber(os.getenv("AI_DETECTION_REVIEW_SUB_URL", "tcp://127.0.0.1:5555"))
+            if _enabled("AI_DETECTION_REVIEW_SUB_ENABLED")
+            else None
+        )
+        self._ai_review_task: asyncio.Task[None] | None = None
+        self._ai_review_save_root = Path(os.getenv("AI_DETECTION_SAVE_ROOT", "data/ai_detect/saved"))
+        self._ai_review_save_active = False
+        self._ai_review_save_count = 0
+        self._ai_review_save_last_path: str | None = None
+        self._ai_review_save_last_error: str | None = None
+        self._ai_review_db_writer = (
+            SpectrogramDbWriter(
+                os.getenv("AI_DETECTION_DB_DSN", AI_DETECTION_DB_DEFAULT_DSN),
+                receiver_id=int(os.getenv("AI_DETECTION_DB_RECEIVER_ID", "2")),
+            )
+            if _enabled("AI_DETECTION_DB_ENABLED")
+            else None
+        )
+        self._ai_review_db_count = 0
+        self._ai_review_db_last_error: str | None = None
+        self.ai_power_range = AiPowerRangeStore(ai_power_range_config_path)
+        self.ai_power_range.load()
         self._status_sequence = 0
         self.spectrum_snapshots = 0
         self.waterfall_snapshots = 0
@@ -173,6 +211,7 @@ class AnalyzerService:
         )
         recording_root_path = self.recording_config.recording_root.resolve(strict=True)
         self.playback = PlaybackService(RecordingCatalog(recording_root_path))
+        self._apply_ai_power_range_to_pipeline(self.playback.engine.source, self.ai_power_range.current())
         self._playback_lock = asyncio.Lock()
         self._playback_restore_ai_enabled: bool | None = None
         self._playback_restore_error: str | None = None
@@ -206,6 +245,8 @@ class AnalyzerService:
         if isinstance(self.source, SimulatorSource):
             self._configure_simulator_waterfall(self.source)
         if isinstance(self.source, (SimulatorSource, San90Source)):
+            self._apply_ai_power_range_to_pipeline(self.source, self.ai_power_range.current())
+        if isinstance(self.source, (SimulatorSource, San90Source)):
             self.source.set_recording_sink(self.recorder)
         minimum_hz, maximum_hz = self._frequency_scan_limits()
         self.frequency_scan.load_configuration(
@@ -224,6 +265,13 @@ class AnalyzerService:
                 self._ai_detection_subscriber.run(self.publish_ai_detection_result),
                 name="ai-detection-subscriber",
             )
+        if self._ai_review_subscriber is not None and (
+            self._ai_review_task is None or self._ai_review_task.done()
+        ):
+            self._ai_review_task = asyncio.create_task(
+                self._ai_review_subscriber.run(self._on_ai_review_snapshot),
+                name="ai-detection-review-subscriber",
+            )
 
     async def stop(self, *, disconnect: bool = False) -> None:
         if self.frequency_scan.running:
@@ -238,6 +286,16 @@ class AnalyzerService:
                 await ai_task
             except asyncio.CancelledError:
                 pass
+        ai_review_task = self._ai_review_task
+        self._ai_review_task = None
+        if ai_review_task is not None:
+            ai_review_task.cancel()
+            try:
+                await ai_review_task
+            except asyncio.CancelledError:
+                pass
+        if self._ai_review_db_writer is not None:
+            await asyncio.to_thread(self._ai_review_db_writer.close)
         task = self._pump_task
         self._pump_task = None
         if task is not None:
@@ -298,6 +356,36 @@ class AnalyzerService:
                 result,
             ),
         )
+
+    def _on_ai_review_snapshot(self, snapshot: AiDetectionReviewSnapshot) -> None:
+        expected_generation = self.ai_power_range.current().generation
+        if snapshot.power_range_generation != expected_generation:
+            return
+        self._ai_review_store.publish(snapshot)
+        if self._ai_review_save_active:
+            asyncio.create_task(self._persist_ai_review_snapshot(snapshot))
+        if self._ai_review_db_writer is not None:
+            asyncio.create_task(self._persist_ai_review_snapshot_to_db(snapshot))
+
+    async def _persist_ai_review_snapshot(self, snapshot: AiDetectionReviewSnapshot) -> None:
+        try:
+            result = await asyncio.to_thread(save_snapshot_to_disk, snapshot, self._ai_review_save_root)
+        except Exception as error:
+            self._ai_review_save_last_error = str(error)
+            return
+        self._ai_review_save_count += 1
+        self._ai_review_save_last_path = result["annotated"]
+        self._ai_review_save_last_error = None
+
+    async def _persist_ai_review_snapshot_to_db(self, snapshot: AiDetectionReviewSnapshot) -> None:
+        try:
+            await asyncio.to_thread(self._ai_review_db_writer.insert_snapshot, snapshot)
+        except Exception as error:
+            self._ai_review_db_last_error = str(error)
+            logger.warning("Failed to persist AI review snapshot to spectrogram table: %s", error)
+            return
+        self._ai_review_db_count += 1
+        self._ai_review_db_last_error = None
 
     def _on_playback_epoch(self, _: int, __: str) -> None:
         self.playback.engine.source.clear_ai_preview("waiting")
@@ -691,15 +779,9 @@ class AnalyzerService:
         return await asyncio.to_thread(self.source.set_ai_stream_enabled, enabled)
 
     async def set_ai_power_profile(self, name: str) -> dict[str, object]:
-        if not isinstance(self.source, (San90Source, SimulatorSource)):
-            raise ControlError(
-                ControlErrorCode.UNSUPPORTED_SETTING,
-                "AI power profiles require the SAN-90 source",
-                requested_value=name,
-                recoverable=True,
-            )
+        previous = self.ai_power_range.current()
         try:
-            return await asyncio.to_thread(self.source.set_ai_power_profile, name)
+            config = await asyncio.to_thread(self.ai_power_range.update_preset, name)
         except ValueError as error:
             raise ControlError(
                 ControlErrorCode.VALUE_OUT_OF_RANGE,
@@ -707,6 +789,40 @@ class AnalyzerService:
                 requested_value=name,
                 recoverable=True,
             ) from error
+        if config is not previous:
+            self._apply_ai_power_range(config)
+        return self.ai_stream_status()
+
+    def get_ai_power_range(self) -> dict[str, object]:
+        return self.ai_power_range.current().as_dict()
+
+    async def set_ai_power_range(self, low_dbm: float, high_dbm: float) -> dict[str, object]:
+        previous = self.ai_power_range.current()
+        try:
+            config = await asyncio.to_thread(self.ai_power_range.update, low_dbm, high_dbm)
+        except ValueError as error:
+            raise ControlError(
+                ControlErrorCode.VALUE_OUT_OF_RANGE,
+                str(error),
+                requested_value={"power_min_dbm": low_dbm, "power_max_dbm": high_dbm},
+                recoverable=True,
+            ) from error
+        if config is not previous:
+            self._apply_ai_power_range(config)
+        return config.as_dict()
+
+    @staticmethod
+    def _apply_ai_power_range_to_pipeline(
+        source: San90Source | SimulatorSource | PlaybackSource,
+        config: AiPowerRangeConfig,
+    ) -> None:
+        source.set_ai_power_range(config.power_min_dbm, config.power_max_dbm, config.generation)
+
+    def _apply_ai_power_range(self, config: AiPowerRangeConfig) -> None:
+        if isinstance(self.source, (San90Source, SimulatorSource)):
+            self._apply_ai_power_range_to_pipeline(self.source, config)
+        self._apply_ai_power_range_to_pipeline(self.playback.engine.source, config)
+        self._ai_review_store.clear("power_range_changed")
 
     def latest_ai_preview_png(self) -> bytes | None:
         status = self.ai_preview_status()
@@ -742,6 +858,36 @@ class AnalyzerService:
         if isinstance(self.source, (San90Source, SimulatorSource)):
             return self.source.ai_preview_image(sequence)
         return None
+
+    def ai_review_status(self) -> dict[str, Any]:
+        return self._ai_review_store.status()
+
+    def ai_review_image(self, sequence: int):
+        return self._ai_review_store.snapshot_for_sequence(sequence)
+
+    def ai_review_save_status(self) -> dict[str, Any]:
+        return {
+            "active": self._ai_review_save_active,
+            "saved_count": self._ai_review_save_count,
+            "last_saved_path": self._ai_review_save_last_path,
+            "last_error": self._ai_review_save_last_error,
+        }
+
+    def start_ai_review_save(self) -> dict[str, Any]:
+        self._ai_review_save_active = True
+        self._ai_review_save_last_error = None
+        return self.ai_review_save_status()
+
+    def stop_ai_review_save(self) -> dict[str, Any]:
+        self._ai_review_save_active = False
+        return self.ai_review_save_status()
+
+    def ai_review_db_status(self) -> dict[str, Any]:
+        return {
+            "enabled": self._ai_review_db_writer is not None,
+            "saved_count": self._ai_review_db_count,
+            "last_error": self._ai_review_db_last_error,
+        }
 
     def capabilities_payload(self) -> dict[str, Any]:
         source = self._display_source()

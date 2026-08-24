@@ -12,10 +12,13 @@ class PowerProfile:
     name: str
     min_dbm: float
     max_dbm: float
+    generation: int = 0
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.min_dbm) or not np.isfinite(self.max_dbm) or self.max_dbm <= self.min_dbm:
             raise ValueError("power profile limits must be finite and increasing")
+        if self.generation < 0:
+            raise ValueError("power profile generation must be non-negative")
 
     @property
     def db_per_gray_level(self) -> float:

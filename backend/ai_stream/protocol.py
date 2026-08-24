@@ -66,6 +66,8 @@ def build_metadata(capture: CaptureMetadata, waterfall_dbm: np.ndarray) -> dict[
         "power_min_dbm": profile.min_dbm,
         "power_max_dbm": profile.max_dbm,
         "db_per_gray_level": profile.db_per_gray_level,
+        "power_range_db": profile.max_dbm - profile.min_dbm,
+        "power_range_generation": profile.generation,
         "trace_count": IMAGE_HEIGHT,
         "first_trace_sequence": capture.first_trace_sequence,
         "last_trace_sequence": capture.last_trace_sequence,

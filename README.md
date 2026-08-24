@@ -39,7 +39,7 @@ npm run frontend:stop
 npm run services:status
 ```
 
-Logs are written to `.run/backend.log` and `.run/frontend.log`. The frontend requires Node.js 20.19 or newer. If the active shell has an older Node version, activate a current version first or set `NODE_BIN_DIR` to its `bin` directory.
+Logs are written to `.run/backend.log` and `.run/frontend.log`. The frontend requires Node.js 20.19 or newer. If the active shell has an older Node version, activate a current version first or set `NODE_BIN_DIR` to its `bin` directory. The backend uses the first Python interpreter with FastAPI and Uvicorn from `BACKEND_PYTHON`, the repository `.venv`, the active `PATH`, or `/usr/bin/python3`, in that order. Set `BACKEND_PYTHON` when dependencies are installed in a different environment.
 
 ### Switching between the web backend and SAStudio
 

@@ -1,0 +1,36 @@
+description: Ultralytics best model trained on yolo_dataset/data.yaml
+author: Ultralytics
+date: '2026-08-06T15:45:17.665967'
+version: 8.4.84
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: TBS
+  1: GSM
+  2: Analog_VTX
+  3: WIFI_802.11
+  4: MOUSE
+  5: DJI_CC
+  6: DJI_DroneID
+  7: DJI_40MHz
+  8: Bluetooth
+  9: DJI_10MHz
+  10: DJI_20MHz
+  11: RFSky
+  12: LRVTX
+  13: ELRS
+args:
+  data: null
+  batch: 1
+  fraction: 1.0
+  quantize: null
+  dynamic: false
+  nms: false
+channels: 3
+end2end: false

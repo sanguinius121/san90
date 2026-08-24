@@ -16,6 +16,8 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from fastapi.exceptions import RequestValidationError
 
 from backend.api.service import AnalyzerService
+from backend.ai_detector_process import AiDetectorProcessManager
+from backend.frontend_process import FrontendProcessManager
 from backend.analyzer.amplitude_correction import validate_amplitude_offset
 from backend.analyzer.errors import ControlError, ControlErrorCode
 from backend.hardware.rf_switch import RfSwitchManager
@@ -40,15 +42,21 @@ from backend.analyzer.vbw import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 service = AnalyzerService()
 rf_switch = RfSwitchManager()
+ai_detector = AiDetectorProcessManager()
+frontend = FrontendProcessManager()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await service.start()
     await asyncio.to_thread(rf_switch.start)
+    await ai_detector.start()
+    await frontend.start()
     try:
         yield
     finally:
+        await frontend.stop()
+        await ai_detector.stop()
         # RF8 is restored before releasing the USB controller. This subsystem
         # is independent of analyzer acquisition and shutdown errors are
         # intentionally contained by the manager.
@@ -233,6 +241,18 @@ class AiStreamEnabledRequest(BaseModel):
 
 class AiPowerProfileRequest(BaseModel):
     profile: str
+
+
+class AiPowerRangeRequest(BaseModel):
+    power_min_dbm: float
+    power_max_dbm: float
+
+    @field_validator("power_min_dbm", "power_max_dbm")
+    @classmethod
+    def finite_power(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("AI power range values must be finite")
+        return value
 
 
 class RfPathRequest(BaseModel):
@@ -559,6 +579,16 @@ async def ai_power_profile(request: AiPowerProfileRequest) -> dict[str, object]:
     return await service.set_ai_power_profile(request.profile)
 
 
+@app.get("/api/analyzer/ai/power-range")
+async def ai_power_range() -> dict[str, object]:
+    return service.get_ai_power_range()
+
+
+@app.put("/api/analyzer/ai/power-range")
+async def update_ai_power_range(request: AiPowerRangeRequest) -> dict[str, object]:
+    return await service.set_ai_power_range(request.power_min_dbm, request.power_max_dbm)
+
+
 @app.get("/api/ai-stream/preview.png")
 async def ai_stream_preview() -> Response:
     image = service.latest_ai_preview_png()
@@ -586,6 +616,47 @@ async def ai_preview_image(sequence: int) -> Response:
             "X-AI-Preview-Sequence": str(snapshot.sequence),
         },
     )
+
+
+@app.get("/api/analyzer/ai/review/status")
+async def ai_review_status() -> dict[str, object]:
+    return service.ai_review_status()
+
+
+@app.get("/api/analyzer/ai/review/image")
+async def ai_review_image(sequence: int, variant: Literal["raw", "annotated"] = "annotated") -> Response:
+    snapshot = service.ai_review_image(sequence)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="AI review sequence is not current")
+    return Response(
+        content=snapshot.image_for(variant),
+        media_type=snapshot.content_type,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "X-AI-Review-Sequence": str(snapshot.sequence),
+        },
+    )
+
+
+@app.get("/api/analyzer/ai/review/save/status")
+async def ai_review_save_status() -> dict[str, object]:
+    return service.ai_review_save_status()
+
+
+@app.post("/api/analyzer/ai/review/save/start")
+async def ai_review_save_start() -> dict[str, object]:
+    return service.start_ai_review_save()
+
+
+@app.post("/api/analyzer/ai/review/save/stop")
+async def ai_review_save_stop() -> dict[str, object]:
+    return service.stop_ai_review_save()
+
+
+@app.get("/api/analyzer/ai/review/db/status")
+async def ai_review_db_status() -> dict[str, object]:
+    return service.ai_review_db_status()
 
 
 @app.put("/api/analyzer/frequency")

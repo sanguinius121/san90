@@ -163,6 +163,10 @@ class SimulatorSource(AnalyzerSource):
         self._ai_stream.set_power_profile(name)
         return self._ai_stream.status()
 
+    def set_ai_power_range(self, low_dbm: float, high_dbm: float, generation: int) -> dict[str, object]:
+        self._ai_stream.set_power_range(low_dbm, high_dbm, generation=generation)
+        return self._ai_stream.status()
+
     def ai_preview_status(self, *, viewer: bool = False) -> dict[str, object]:
         return self._ai_stream.preview_status(viewer=viewer)
 

@@ -53,6 +53,15 @@ The following major features are implemented:
 - Recoverable IF-overflow warning.
 - FT232H RF-path selection with fail-safe RF8 initialization and reconnect.
 - Bounded 640×640 GRAY8 ZeroMQ image output for an external AI service.
+- The AI Preview provides one persisted dual-handle GRAY8 power-range control
+  (-140 to +10 dBm, minimum 10 dB). External LNA remains the default; Normal
+  and Strong Signal remain presets. Hardware, simulator, playback AI, port
+  5557, preview/review, and dataset metadata share the committed mapping
+  without changing hardware Reference Level or analyzer acquisition.
+  A short SAN-90 check on 2026-08-24 changed -120/-20 to -100/-50 and back:
+  review generations followed both commits, analyzer configuration generation
+  and reconfiguration counters did not change, and acquisition errors/timeouts
+  remained zero.
 - The standalone GRAY8 dataset receiver keeps its original PNG plus metadata
   JSON behavior by default and offers an opt-in `--auto-labelme` mode. The mode
   estimates a per-frequency-column noise floor, emits human-reviewable
@@ -369,12 +378,17 @@ The main backend contains a production-bounded AI image publisher:
 - queue size 2, buffer pool size 4, drop-oldest behavior;
 - normal operation does not block SAN-90 acquisition or WebSocket rendering.
 
-Power profiles are selected with `AI_POWER_PROFILE` or
-`PUT /api/ai-stream/power-profile`:
+Power profiles remain available as presets:
 
 - `normal`: approximately -130 to -50 dBm;
 - `external_lna`: approximately -120 to -20 dBm;
 - `strong_signal`: approximately -100 to 0 dBm.
+
+The authoritative runtime values are now `power_min_dbm` and
+`power_max_dbm`, persisted atomically and exposed through
+`GET/PUT /api/analyzer/ai/power-range`. Custom values are bounded to -140 to
++10 dBm with a minimum 10 dB range. This application-level mapping does not
+change SAN-90 hardware Reference Level or RF configuration.
 
 The external service at `AI services/AI-for-san90/yolo_detection.py`:
 

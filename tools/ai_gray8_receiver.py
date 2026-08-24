@@ -31,6 +31,12 @@ def _parse_bool(value: str) -> bool:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--connect", default="tcp://127.0.0.1:5557")
+    parser.add_argument(
+        "--socket-type",
+        choices=["pull", "sub"],
+        default="pull",
+        help="PULL for direct backend connection; SUB when connecting via zmq_proxy.py (default: pull)",
+    )
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument("--save-every", type=int, default=10)
     parser.add_argument("--max-files", type=int, default=20)
@@ -277,7 +283,11 @@ def main() -> int:
         except ImportError:
             print("--display requires optional OpenCV; receiving will continue without a window", file=sys.stderr)
     context = zmq.Context.instance()
-    socket = context.socket(zmq.PULL)
+    if args.socket_type == "sub":
+        socket = context.socket(zmq.SUB)
+        socket.setsockopt(zmq.SUBSCRIBE, b"")
+    else:
+        socket = context.socket(zmq.PULL)
     socket.setsockopt(zmq.RCVHWM, 2)
     socket.connect(args.connect)
     received = 0

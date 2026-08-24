@@ -200,23 +200,21 @@ describe('plot renderer lifecycle',()=>{
       available:false,
       reason:'waiting',
       sequence:null,
-      source:'simulator',
-      playback_epoch:null,
-      config_id:null,
-      configuration_generation:null,
+      timestamp_ns:null,
+      width:640,
+      height:640,
       center_frequency_hz:null,
       frequency_start_hz:null,
       frequency_stop_hz:null,
-      width:640,
-      height:640,
-      created_at_ns:null,
-      content_type:'image/png',
+      content_type:'image/jpeg',
+      detection_count:0,
+      received_at_ns:null,
     }),{status:200,headers:{'Content-Type':'application/json'}}))))
     render(<AppLayout/>)
     expect(screen.getAllByRole('button',{name:/Frequency|RF Path|Amplitude|Bandwidth|Detection|Record|Playback/}).length).toBeGreaterThan(0)
 
     fireEvent.click(screen.getByTitle('AI Preview'))
-    expect(screen.getByText('XEM TRƯỚC ẢNH AI')).toBeTruthy()
+    expect(screen.getByText('KẾT QUẢ PHÁT HIỆN AI')).toBeTruthy()
     expect(screen.queryByText('AI IMAGE PREVIEW')).toBeNull()
     expect(screen.queryByText('LATEST AI INPUT')).toBeNull()
     expect(screen.queryByRole('button',{name:'Frequency'})).toBeNull()
@@ -225,7 +223,7 @@ describe('plot renderer lifecycle',()=>{
 
     fireEvent.click(screen.getByTitle('RF Controls'))
     expect(screen.getByRole('button',{name:'Frequency'})).toBeTruthy()
-    expect(screen.queryByText('XEM TRƯỚC ẢNH AI')).toBeNull()
+    expect(screen.queryByText('KẾT QUẢ PHÁT HIỆN AI')).toBeNull()
     expect([lifecycle.spectrumCreated.mock.calls.length,lifecycle.spectrogramCreated.mock.calls.length]).toEqual([1,1])
   })
 })

@@ -12,7 +12,7 @@ command -v usbreset >/dev/null 2>&1 || {
   exit 1
 }
 
-if pgrep -f '^python3 -m uvicorn backend\.main:app( |$)' >/dev/null 2>&1; then
+if pgrep -f '^([^[:space:]]*/)?python([0-9]+([.][0-9]+)*)? -m uvicorn backend\.main:app( |$)' >/dev/null 2>&1; then
   printf 'Refusing USB reset while the SAN-90 backend is running.\n' >&2
   exit 1
 fi
